@@ -21,7 +21,7 @@ import {
   type UserKey,
   verifyToken,
 } from "./logic.ts";
-import type { Meal, MealItem, MealPatch, MealType, Profile, Store } from "./store.ts";
+import type { Meal, MealItem, MealPatch, MealType, Profile, SkippableMeal, Store } from "./store.ts";
 
 export interface Config {
   users: Record<UserKey, { name: string; password: string | undefined }>;
@@ -49,6 +49,7 @@ const CORS_HEADERS = {
 };
 
 const MEAL_TYPES: MealType[] = ["breakfast", "lunch", "dinner", "snack"];
+const SKIPPABLE: Record<SkippableMeal, string> = { breakfast: "아침", lunch: "점심", dinner: "저녁" };
 const PHOTO_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -280,11 +281,12 @@ export function createHandler(store: Store, ai: FoodAi, config: Config) {
 
   async function day(url: URL) {
     const date = dateField(url.searchParams.get("date"));
-    const [meals, workouts, photos, targets] = await Promise.all([
+    const [meals, workouts, photos, targets, skips] = await Promise.all([
       store.listMeals(date, date),
       store.listWorkouts(date, date),
       store.listWorkoutPhotos(date, date),
       store.getTargets(),
+      store.listSkips(date, date),
     ]);
     const urls = await store.signPhotoUrls([
       ...meals.flatMap((m) => (m.photo_path ? [m.photo_path] : [])),
@@ -296,6 +298,8 @@ export function createHandler(store: Store, ai: FoodAi, config: Config) {
       const total = mine.reduce((s, m) => s + m.calories_kcal, 0);
       const target = targetOn(targets, k, date);
       const { macros, macroKcal } = nutrition(mine);
+      const skipped = (Object.keys(SKIPPABLE) as SkippableMeal[])
+        .filter((t) => skips.some((s) => s.user_key === k && s.meal_type === t));
       return [k, {
         name: config.users[k].name,
         total_kcal: total,
@@ -309,7 +313,9 @@ export function createHandler(store: Store, ai: FoodAi, config: Config) {
           macros,
           macroKcal,
           isPast: date < todayIn(config.timeZone),
+          skipped: skipped.map((t) => SKIPPABLE[t]),
         }),
+        skipped,
         meals: mine.map((meal) => {
           const { photo_path, ...m } = withItems(meal);
           return { ...m, photo_url: photo_path ? urls[photo_path] ?? null : null };
@@ -370,7 +376,11 @@ export function createHandler(store: Store, ai: FoodAi, config: Config) {
       await store.uploadPhoto(path, photo.data, photo.type);
     }
     try {
-      return json({ meal: await store.insertMeal({ ...fields, photo_path: path }) }, 201);
+      const meal = await store.insertMeal({ ...fields, photo_path: path });
+      if (fields.meal_type in SKIPPABLE) {
+        await store.setSkip(userKey, fields.date, fields.meal_type as SkippableMeal, false);
+      }
+      return json({ meal }, 201);
     } catch (e) {
       if (path) await store.removePhotos([path]).catch(() => {});
       throw e;
@@ -411,6 +421,20 @@ export function createHandler(store: Store, ai: FoodAi, config: Config) {
     } else {
       await store.setWorkout(userKey, date, true);
     }
+    return json({ ok: true });
+  }
+
+  async function setSkip(date: string, mealType: string, userKey: UserKey, on: boolean) {
+    dateField(date);
+    if (!(mealType in SKIPPABLE)) throw new HttpError(400, "아침·점심·저녁만 안 먹음으로 표시할 수 있습니다.");
+    const type = mealType as SkippableMeal;
+    if (on) {
+      const meals = await store.listMeals(date, date);
+      if (meals.some((m) => m.user_key === userKey && m.meal_type === type)) {
+        throw new HttpError(409, `이미 ${SKIPPABLE[type]} 기록이 있어요. 기록을 지운 뒤 다시 시도해 주세요.`);
+      }
+    }
+    await store.setSkip(userKey, date, type, on);
     return json({ ok: true });
   }
 
@@ -475,6 +499,10 @@ export function createHandler(store: Store, ai: FoodAi, config: Config) {
     if ((match = path.match(/^\/workouts\/(\d{4}-\d{2}-\d{2})$/))) {
       if (m === "PUT") return setWorkout(match[1], userKey, true);
       if (m === "DELETE") return setWorkout(match[1], userKey, false);
+    }
+    if ((match = path.match(/^\/skips\/(\d{4}-\d{2}-\d{2})\/([a-z]+)$/))) {
+      if (m === "PUT") return setSkip(match[1], match[2], userKey, true);
+      if (m === "DELETE") return setSkip(match[1], match[2], userKey, false);
     }
     if (m === "POST" && path === "/workout-photos") return addWorkoutPhoto(req, userKey);
     if ((match = path.match(/^\/workout-photos\/([0-9a-f-]{36})$/)) && m === "DELETE") {

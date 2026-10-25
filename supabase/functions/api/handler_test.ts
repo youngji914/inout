@@ -331,3 +331,31 @@ Deno.test("saved macros feed the day nutrition and feedback", async () => {
   assert(day.users.user1.feedback.some((f: { text: string }) => f.text.startsWith("탄수화물 비중이 높아요")));
   assertEquals(day.users.user2.feedback, []);
 });
+
+Deno.test("skipped meals are recorded separately and cleared by a real meal", async () => {
+  const t = setup();
+  const yj = await t.login("user1", "1111");
+  assertEquals((await t.call("PUT", "/skips/2026-10-25/breakfast", { token: yj })).status, 200);
+  assertEquals((await t.call("PUT", "/skips/2026-10-25/snack", { token: yj })).status, 400);
+
+  let day = await (await t.call("GET", "/day?date=2026-10-25", { token: yj })).json();
+  assertEquals(day.users.user1.skipped, ["breakfast"]);
+  assertEquals(day.users.user1.status, null);
+  assertEquals(day.users.user1.total_kcal, 0);
+  assert(day.users.user1.feedback[0].text.startsWith("아침을 걸렀어요"));
+  assertEquals(day.users.user2.skipped, []);
+
+  // 점심 기록이 있으면 점심 안 먹음은 거부
+  await t.call("POST", "/meals", { token: yj, form: mealForm(LUNCH, false) });
+  assertEquals((await t.call("PUT", "/skips/2026-10-25/lunch", { token: yj })).status, 409);
+
+  // 안 먹음으로 표시한 아침에 식사를 기록하면 표시가 지워짐
+  await t.call("POST", "/meals", { token: yj, form: mealForm({ ...LUNCH, meal_type: "breakfast" }, false) });
+  day = await (await t.call("GET", "/day?date=2026-10-25", { token: yj })).json();
+  assertEquals(day.users.user1.skipped, []);
+
+  await t.call("PUT", "/skips/2026-10-25/dinner", { token: yj });
+  assertEquals((await t.call("DELETE", "/skips/2026-10-25/dinner", { token: yj })).status, 200);
+  day = await (await t.call("GET", "/day?date=2026-10-25", { token: yj })).json();
+  assertEquals(day.users.user1.skipped, []);
+});

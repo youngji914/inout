@@ -180,10 +180,20 @@ export function dayFeedback(input: {
   macroKcal: number;
   /** 이미 지난 날짜인지 (적게 먹은 날 안내용) */
   isPast: boolean;
+  /** 거른 끼니 이름 (예: ["아침"]) */
+  skipped?: string[];
 }): Feedback[] {
-  const { mealCount, totalKcal, targetKcal, macros, macroKcal, isPast } = input;
-  if (mealCount === 0) return [];
+  const { mealCount, totalKcal, targetKcal, macros, macroKcal, isPast, skipped = [] } = input;
   const out: Feedback[] = [];
+  if (skipped.length) {
+    out.push({
+      level: "info",
+      text: skipped.length >= 2
+        ? `${skipped.join("·")}을 걸렀어요. 끼니를 자주 거르면 다음 끼니에 과식하기 쉬워요.`
+        : `${skipped[0]}을 걸렀어요. 다음 끼니에 과식하지 않도록 천천히 드세요.`,
+    });
+  }
+  if (mealCount === 0) return out;
 
   if (targetKcal) {
     const ratio = totalKcal / targetKcal;

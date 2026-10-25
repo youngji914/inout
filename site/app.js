@@ -412,7 +412,11 @@ function renderDay() {
             </span>
             <span class="kcal num">${fmtKcal(m.calories_kcal)} kcal</span>
           </button>`).join("")
-        : `<p class="empty-line">아직 기록이 없어요</p>`
+        : (u.skipped || []).includes(type)
+        ? `<div class="empty-line skipped"><span>안 먹었어요</span>${mine ? `<button class="btn text" data-unskip="${type}">취소</button>` : ""}</div>`
+        : `<div class="empty-line"><span>아직 기록이 없어요</span>${
+          mine && type !== "snack" ? `<button class="btn text" data-skip="${type}">안 먹음</button>` : ""
+        }</div>`
     }
       </div>`;
   }).join("");
@@ -502,6 +506,15 @@ function renderDay() {
     else if (meal.photo_url) zoom(meal.photo_url);
   }));
   $app.querySelectorAll("[data-zoom]").forEach((img) => img.addEventListener("click", () => zoom(img.src)));
+  $app.querySelectorAll("[data-skip], [data-unskip]").forEach((b) => b.addEventListener("click", async () => {
+    const type = b.dataset.skip || b.dataset.unskip;
+    try {
+      await api(`/skips/${state.date}/${type}`, { method: b.dataset.skip ? "PUT" : "DELETE" });
+      refresh({ silent: true });
+    } catch (e) {
+      toast(e.message);
+    }
+  }));
   $app.querySelector("[data-add=photo]")?.addEventListener("click", addMealFromPhoto);
   $app.querySelector("[data-add=manual]")?.addEventListener("click", () => {
     const now = new Date();
@@ -527,7 +540,9 @@ const MACRO_LABELS = [
 ];
 
 function feedbackHtml(u) {
-  if (!u.meals.length) return `<p class="muted small" style="margin:0">식사를 기록하면 탄수화물·단백질·지방 비율과 피드백을 보여 드려요.</p>`;
+  if (!u.meals.length && !u.feedback.length) {
+    return `<p class="muted small" style="margin:0">식사를 기록하면 탄수화물·단백질·지방 비율과 피드백을 보여 드려요.</p>`;
+  }
   const m = u.macros;
   const kcal = { carbs_g: m.carbs_g * 4, protein_g: m.protein_g * 4, fat_g: m.fat_g * 9 };
   const sum = kcal.carbs_g + kcal.protein_g + kcal.fat_g;
@@ -685,7 +700,14 @@ function openMealEditor({ meal, draft }) {
     MEAL_TYPES.map(([t, l]) => `<button type="button" class="pill ${t === mealType ? "on" : ""}" data-t="${t}">${l}</button>`).join("")
   }</div>
         </div>
-        <div class="field" style="margin-bottom:0">
+        ${
+    !editing && !d.photo
+      ? `<label class="check" id="skip-row" ${mealType === "snack" ? "hidden" : ""}>
+          <input type="checkbox" id="skip-meal"><span>이 끼니는 안 먹었어요</span>
+        </label>`
+      : ""
+  }
+        <div class="field" id="food-field" style="margin-bottom:0">
           <span class="label">음식</span>
           <div class="items" id="items"></div>
           <p class="small muted" style="margin:8px 0 0">칼로리를 모르면 이름만 쓰세요. "라면 반 개"처럼 양을 적으면 더 정확해요.</p>
@@ -819,9 +841,18 @@ function openMealEditor({ meal, draft }) {
   });
   form.date.addEventListener("change", updateWhen);
   form.time.addEventListener("change", updateWhen);
+  const $skip = $modal.querySelector("#skip-meal");
+  const skipping = () => !!$skip?.checked && mealType !== "snack";
+  const updateSkip = () => {
+    $modal.querySelector("#food-field").hidden = skipping();
+    const row = $modal.querySelector("#skip-row");
+    if (row) row.hidden = mealType === "snack";
+  };
+  $skip?.addEventListener("change", updateSkip);
   $modal.querySelectorAll("#meal-type .pill").forEach((b) => b.addEventListener("click", () => {
     mealType = b.dataset.t;
     $modal.querySelectorAll("#meal-type .pill").forEach((x) => x.classList.toggle("on", x === b));
+    updateSkip();
   }));
   $modal.querySelector("#meal-cancel").addEventListener("click", () => $modal.close());
   $modal.querySelector("#meal-close").addEventListener("click", () => $modal.close());
@@ -849,6 +880,22 @@ function openMealEditor({ meal, draft }) {
     e.preventDefault();
     const err = $modal.querySelector("#meal-error");
     err.textContent = "";
+    if (skipping()) {
+      const btn = form.querySelector("button[type=submit]");
+      btn.disabled = true;
+      try {
+        await api(`/skips/${form.date.value}/${mealType}`, { method: "PUT" });
+        $modal.close();
+        state.date = form.date.value;
+        state.viewUser = state.me;
+        toast("안 먹은 끼니로 표시했어요");
+        refresh({ silent: true });
+      } catch (ex) {
+        err.textContent = ex.message;
+        btn.disabled = false;
+      }
+      return;
+    }
     if (pending.size) {
       err.textContent = "칼로리를 추정하고 있어요. 잠시만 기다려 주세요.";
       return;

@@ -1,7 +1,7 @@
 // 테스트·로컬 개발용 메모리 저장소.
 
 import type { TargetRow, UserKey } from "./logic.ts";
-import type { Meal, Profile, Store, Workout, WorkoutPhoto } from "./store.ts";
+import type { Meal, MealSkip, Profile, Store, Workout, WorkoutPhoto } from "./store.ts";
 
 export function memoryStore() {
   const profiles: Profile[] = (["user1", "user2"] as UserKey[]).map((k) => ({
@@ -20,6 +20,7 @@ export function memoryStore() {
   const meals: Meal[] = [];
   const workouts: Workout[] = [];
   const photos: WorkoutPhoto[] = [];
+  const skips: MealSkip[] = [];
   const files = new Map<string, Uint8Array>();
   const failures: { user_key: string; at: string }[] = [];
   const inRange = (d: string, from: string, to: string) => d >= from && d <= to;
@@ -74,6 +75,13 @@ export function memoryStore() {
     },
     deleteWorkoutPhoto: (id) => {
       photos.splice(photos.findIndex((p) => p.id === id), 1);
+      return Promise.resolve();
+    },
+    listSkips: (from, to) => Promise.resolve(skips.filter((s) => inRange(s.date, from, to))),
+    setSkip: (userKey, date, mealType, on) => {
+      const i = skips.findIndex((s) => s.user_key === userKey && s.date === date && s.meal_type === mealType);
+      if (on && i < 0) skips.push({ user_key: userKey, date, meal_type: mealType });
+      if (!on && i >= 0) skips.splice(i, 1);
       return Promise.resolve();
     },
     countLoginFailures: (userKey, since) =>

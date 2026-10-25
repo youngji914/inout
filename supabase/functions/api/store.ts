@@ -58,6 +58,14 @@ export interface WorkoutPhoto {
   photo_path: string;
 }
 
+export type SkippableMeal = Exclude<MealType, "snack">;
+
+export interface MealSkip {
+  user_key: UserKey;
+  date: string;
+  meal_type: SkippableMeal;
+}
+
 export interface Store {
   getProfiles(): Promise<Profile[]>;
   updateProfile(p: Profile): Promise<void>;
@@ -76,6 +84,9 @@ export interface Store {
   getWorkoutPhoto(id: string): Promise<WorkoutPhoto | null>;
   insertWorkoutPhoto(p: Omit<WorkoutPhoto, "id">): Promise<WorkoutPhoto>;
   deleteWorkoutPhoto(id: string): Promise<void>;
+
+  listSkips(from: string, to: string): Promise<MealSkip[]>;
+  setSkip(userKey: UserKey, date: string, mealType: SkippableMeal, on: boolean): Promise<void>;
 
   countLoginFailures(userKey: UserKey, sinceIso: string): Promise<number>;
   addLoginFailure(userKey: UserKey): Promise<void>;
@@ -185,6 +196,23 @@ export function supabaseStore(): Store {
     },
     async deleteWorkoutPhoto(id) {
       check(await db.from("workout_photos").delete().eq("id", id));
+    },
+
+    async listSkips(from, to) {
+      return check(
+        await db.from("meal_skips").select("user_key,date,meal_type").gte("date", from).lte("date", to),
+      ) as MealSkip[];
+    },
+    async setSkip(userKey, date, mealType, on) {
+      if (on) {
+        check(
+          await db.from("meal_skips").upsert({ user_key: userKey, date, meal_type: mealType }, {
+            ignoreDuplicates: true,
+          }),
+        );
+      } else {
+        check(await db.from("meal_skips").delete().eq("user_key", userKey).eq("date", date).eq("meal_type", mealType));
+      }
     },
 
     async countLoginFailures(userKey, sinceIso) {
