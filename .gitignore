@@ -3,3 +3,8 @@ __pycache__/
 .venv/
 .env
 .pytest_cache/
+
+# Supabase CLI
+supabase/.temp/
+supabase/.branches/
+supabase/functions/.env

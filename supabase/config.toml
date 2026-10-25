@@ -1,0 +1,5 @@
+# Supabase CLI 설정. 이 앱은 자체 로그인 토큰을 쓰므로 Supabase JWT 검사를 끈다.
+project_id = "inout"
+
+[functions.api]
+verify_jwt = false
