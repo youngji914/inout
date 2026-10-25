@@ -23,6 +23,17 @@ uvicorn app.main:app --reload
 
 사용 모델은 기본값 `claude-opus-5-5`이며, `FOOD_CLASSIFIER_MODEL` 환경변수로 바꿀 수 있습니다.
 
+## GitHub Pages 버전
+
+https://youngji914.github.io/inout/
+
+GitHub Pages는 서버를 실행할 수 없어서 `site/index.html`은 별도의 정적 버전입니다.
+방문자가 자기 Claude API 키를 입력하면 브라우저에서 Anthropic API를 직접 호출합니다.
+키는 이 사이트로 전송되지 않고, "기억하기"를 켠 경우에만 그 브라우저의 localStorage에 저장됩니다.
+
+`site/`가 바뀌어 기본 브랜치에 push되면 `.github/workflows/pages.yml`이 자동으로 배포합니다
+(저장소 Settings → Pages → Source가 **GitHub Actions**여야 합니다).
+
 ## API
 
 `POST /api/classify` — `multipart/form-data`의 `image` 필드로 JPEG/PNG/GIF/WEBP 이미지(5MB 이하)를 보냅니다.
