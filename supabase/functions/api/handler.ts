@@ -3,7 +3,10 @@
 import type { Analyzer } from "./analyze.ts";
 import { HttpError } from "./http.ts";
 import {
+  ACTIVITY_LEVELS,
+  type ActivityLevel,
   calcBmr,
+  calcEer,
   dayStatus,
   isDate,
   isMonth,
@@ -16,7 +19,7 @@ import {
   type UserKey,
   verifyToken,
 } from "./logic.ts";
-import type { Meal, MealPatch, MealType, Profile, Store } from "./store.ts";
+import type { Meal, MealItem, MealPatch, MealType, Profile, Store } from "./store.ts";
 
 export interface Config {
   users: Record<UserKey, { name: string; password: string | undefined }>;
@@ -120,10 +123,37 @@ function mealTypeField(v: unknown): MealType {
   return v as MealType;
 }
 
-function foodNameField(v: unknown): string {
-  const s = typeof v === "string" ? v.trim() : "";
-  if (!s || s.length > 100) throw new HttpError(400, "음식 이름을 1~100자로 입력해 주세요.");
-  return s;
+const MAX_ITEMS = 20;
+
+/** 음식 항목 목록을 검증하고, 목록용 이름(food_name)과 합계(calories_kcal)를 함께 만든다. */
+function itemsField(v: unknown): Pick<Meal, "items" | "food_name" | "calories_kcal"> {
+  let raw = v;
+  if (typeof v === "string") {
+    try {
+      raw = JSON.parse(v);
+    } catch {
+      raw = null;
+    }
+  }
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ITEMS) {
+    throw new HttpError(400, `음식을 1~${MAX_ITEMS}개 입력해 주세요.`);
+  }
+  const items: MealItem[] = raw.map((it) => {
+    const name = typeof it?.name === "string" ? it.name.trim() : "";
+    if (!name || name.length > 50) throw new HttpError(400, "음식 이름을 1~50자로 입력해 주세요.");
+    return { name, calories_kcal: int(it.calories_kcal, `${name} 칼로리`, 0, 10000) };
+  });
+  const joined = items.map((i) => i.name).join(", ");
+  return {
+    items,
+    food_name: joined.length > 100 ? `${joined.slice(0, 99)}…` : joined,
+    calories_kcal: items.reduce((sum, i) => sum + i.calories_kcal, 0),
+  };
+}
+
+/** 항목 없이 저장된 예전 기록은 하나짜리 목록으로 보여 준다. */
+function withItems(m: Meal): Meal {
+  return m.items?.length ? m : { ...m, items: [{ name: m.food_name, calories_kcal: m.calories_kcal }] };
 }
 
 export function createHandler(store: Store, analyze: Analyzer, config: Config) {
@@ -184,16 +214,21 @@ export function createHandler(store: Store, analyze: Analyzer, config: Config) {
     const age = int(body.age, "나이", 10, 120);
     const height = num(body.height_cm, "키", 50, 250);
     const weight = num(body.weight_kg, "몸무게", 20, 300);
+    const level = body.activity_level as ActivityLevel;
+    if (!ACTIVITY_LEVELS.includes(level)) throw new HttpError(400, "활동 수준을 선택해 주세요.");
     const offset = int(body.goal_offset_kcal, "목표", -2000, 2000);
     const bmr = calcBmr(sex, age, height, weight);
-    const target = Math.max(bmr + offset, 0);
+    const eer = calcEer(sex, age, height, weight, level);
+    const target = Math.max(eer + offset, 0);
     const profile: Profile = {
       user_key: userKey,
       sex,
       age,
       height_cm: height,
       weight_kg: weight,
+      activity_level: level,
       bmr_kcal: bmr,
+      eer_kcal: eer,
       goal_offset_kcal: offset,
       daily_target_kcal: target,
     };
@@ -233,7 +268,10 @@ export function createHandler(store: Store, analyze: Analyzer, config: Config) {
         total_kcal: total,
         target_kcal: target,
         status: dayStatus(total, target, mine.length),
-        meals: mine.map(({ photo_path, ...m }) => ({ ...m, photo_url: photo_path ? urls[photo_path] ?? null : null })),
+        meals: mine.map((meal) => {
+          const { photo_path, ...m } = withItems(meal);
+          return { ...m, photo_url: photo_path ? urls[photo_path] ?? null : null };
+        }),
         worked_out: workouts.some((w) => w.user_key === k),
         workout_photos: photos.filter((p) => p.user_key === k).map((p) => ({
           id: p.id,
@@ -281,8 +319,7 @@ export function createHandler(store: Store, analyze: Analyzer, config: Config) {
       recorded_at: timestampField(form.get("recorded_at")),
       date: dateField(form.get("date")),
       meal_type: mealTypeField(form.get("meal_type")),
-      food_name: foodNameField(form.get("food_name")),
-      calories_kcal: int(form.get("calories_kcal"), "칼로리", 0, 20000),
+      ...itemsField(form.get("items")),
       ai_estimated: form.get("ai_estimated") === "true",
     };
     let path: string | null = null;
@@ -312,8 +349,7 @@ export function createHandler(store: Store, analyze: Analyzer, config: Config) {
     if ("recorded_at" in body) patch.recorded_at = timestampField(body.recorded_at);
     if ("date" in body) patch.date = dateField(body.date);
     if ("meal_type" in body) patch.meal_type = mealTypeField(body.meal_type);
-    if ("food_name" in body) patch.food_name = foodNameField(body.food_name);
-    if ("calories_kcal" in body) patch.calories_kcal = int(body.calories_kcal, "칼로리", 0, 20000);
+    if ("items" in body) Object.assign(patch, itemsField(body.items));
     return json({ meal: await store.updateMeal(id, patch) });
   }
 

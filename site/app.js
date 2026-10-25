@@ -9,8 +9,28 @@ const MEAL_TYPES = [
   ["dinner", "저녁"],
   ["snack", "간식"],
 ];
-const MEAL_LABEL = Object.fromEntries(MEAL_TYPES);
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+const WEEKDAYS_LONG = ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"];
+const ACTIVITY = [
+  ["sedentary", "비활동적", "대부분 앉아서 생활하고 운동은 거의 하지 않아요"],
+  ["low", "저활동적", "가벼운 걷기·집안일, 주 1~2회 가벼운 운동"],
+  ["active", "활동적", "주 3~5회 운동하거나 많이 걷는 일을 해요"],
+  ["very_active", "매우 활동적", "거의 매일 강한 운동이나 몸 쓰는 일을 해요"],
+];
+const GOAL_PRESETS = [
+  [0, "권장량"],
+  [-300, "−300"],
+  [-500, "−500"],
+];
+const STATUS = { green: "good", orange: "warn", red: "bad" };
+
+const ICON = {
+  left: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M14.5 6 8.5 12l6 6"/></svg>`,
+  right: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg>`,
+  close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
+  camera: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1.5-2h6l1.5 2h2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="13" r="3.5"/></svg>`,
+  dish: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 16h18M5 16a7 7 0 0 1 14 0M12 9V7"/></svg>`,
+};
 
 const state = {
   token: null,
@@ -63,6 +83,18 @@ function fmtDate(s) {
   return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAYS[d.getDay()]})`;
 }
 
+function fmtTime(t) {
+  const [h, m] = t.split(":").map(Number);
+  return `${h < 12 ? "오전" : "오후"} ${h % 12 || 12}:${pad(m)}`;
+}
+
+function relDay(s) {
+  const today = ymd(new Date());
+  if (s === today) return "오늘";
+  if (s === addDays(today, -1)) return "어제";
+  return fmtDate(s);
+}
+
 function fmtKcal(n) {
   return Number(n).toLocaleString("ko-KR");
 }
@@ -89,6 +121,10 @@ function userName(key) {
 
 function myProfile() {
   return state.users.find((u) => u.user_key === state.me)?.profile ?? null;
+}
+
+function statusKey(status) {
+  return STATUS[status] || "";
 }
 
 let toastTimer;
@@ -217,24 +253,30 @@ async function renderLogin() {
   try {
     users = (await api("/users")).users;
   } catch (e) {
-    $app.innerHTML = `<h1>🍽️ 칼로리 노트</h1><div class="card error">${esc(e.message)}</div>`;
+    $app.innerHTML = `<p class="eyebrow">Calorie Note</p><div class="card error">${esc(e.message)}</div>`;
     return;
   }
   let selected = storage((s) => s.getItem("calorie-note-last-user")) || users[0].user_key;
   $app.innerHTML = `
-    <h1>🍽️ 칼로리 노트</h1>
-    <div class="card">
-      <h2>누구세요?</h2>
-      <div class="login-users">
-        ${users.map((u) => `<button data-user="${u.user_key}">${esc(u.name)}</button>`).join("")}
-      </div>
-      <form id="login-form">
-        <label class="field"><span>비밀번호</span><input type="password" name="password" autocomplete="current-password" required></label>
+    <div class="login">
+      <p class="eyebrow">Calorie Note</p>
+      <h1 class="display">오늘의 식사를<br>가볍게 기록해요</h1>
+      <p class="lead">사진 한 장이면 칼로리가 채워지고, 두 사람의 하루가 한 달력에 쌓여요.</p>
+      <form class="card" id="login-form">
+        <div class="field">
+          <span class="label">누구세요?</span>
+          <div class="pills fill">
+            ${users.map((u) => `<button type="button" class="pill" data-user="${u.user_key}">${esc(u.name)}</button>`).join("")}
+          </div>
+        </div>
+        <label class="field"><span class="label">비밀번호</span>
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
         <button class="btn primary block" type="submit">로그인</button>
-        <p class="error small" id="login-error"></p>
+        <p class="error small" id="login-error" style="margin:12px 0 0"></p>
       </form>
     </div>`;
-  const mark = () => $app.querySelectorAll("[data-user]").forEach((b) => b.classList.toggle("selected", b.dataset.user === selected));
+  const mark = () => $app.querySelectorAll("[data-user]").forEach((b) => b.classList.toggle("on", b.dataset.user === selected));
   mark();
   $app.querySelectorAll("[data-user]").forEach((b) => b.addEventListener("click", () => {
     selected = b.dataset.user;
@@ -243,7 +285,7 @@ async function renderLogin() {
   }));
   $app.querySelector("#login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const btn = e.target.querySelector("button");
+    const btn = e.target.querySelector("button[type=submit]");
     btn.disabled = true;
     try {
       const data = await api("/login", { method: "POST", json: { user_key: selected, password: e.target.password.value } });
@@ -255,12 +297,17 @@ async function renderLogin() {
         s.setItem(TOKEN_KEY, data.token);
         s.setItem("calorie-note-last-user", data.user_key);
       });
-      go(myProfile()?.daily_target_kcal ? "day" : "profile");
+      go(needsProfile() ? "profile" : "day");
     } catch (err) {
       $app.querySelector("#login-error").textContent = err.message;
       btn.disabled = false;
     }
   });
+}
+
+function needsProfile() {
+  const p = myProfile();
+  return !p?.daily_target_kcal || !p.activity_level;
 }
 
 function logout() {
@@ -317,10 +364,6 @@ document.addEventListener("visibilitychange", () => {
 
 // ---------- 하루 화면 ----------
 
-function statusClass(status) {
-  return status ? `s-${status}` : "";
-}
-
 function renderDay() {
   const d = state.day;
   const key = state.viewUser || state.me;
@@ -328,42 +371,48 @@ function renderDay() {
   const mine = key === state.me;
   const total = u.total_kcal;
   const target = u.target_kcal;
+  const s = statusKey(u.status);
+  const date = parseYmd(d.date);
 
   let summary;
   if (target) {
     const diff = target - total;
     const pct = Math.min(100, Math.round((total / target) * 100));
     summary = `
-      <div class="nums"><span class="big">${fmtKcal(total)}</span><span class="muted">/ ${fmtKcal(target)} kcal</span></div>
-      <div class="meter"><div class="${statusClass(u.status)}" style="width:${pct}%"></div></div>
-      <div class="${u.status ? `t-${u.status}` : "muted"}">${
-      diff >= 0 ? `${fmtKcal(diff)} kcal 남음` : `${fmtKcal(-diff)} kcal 초과`
-    }</div>`;
+      <p class="eyebrow">섭취 칼로리</p>
+      <div class="row"><span class="num big">${fmtKcal(total)}</span><span class="of">/ ${fmtKcal(target)} kcal</span></div>
+      <div class="meter"><div class="${s ? `bg-${s}` : ""}" style="width:${pct}%"></div></div>
+      <div class="small ${s ? `t-${s}` : "muted"}">${diff >= 0 ? `${fmtKcal(diff)} kcal 남았어요` : `목표보다 ${fmtKcal(-diff)} kcal 더 먹었어요`}</div>`;
   } else {
     summary = `
-      <div class="nums"><span class="big">${fmtKcal(total)}</span><span class="muted">kcal</span></div>
-      <p class="muted small">${mine ? `목표가 아직 없어요. <a href="#" data-go="profile">내 정보</a>에서 설정하세요.` : "아직 목표를 설정하지 않았어요."}</p>`;
+      <p class="eyebrow">섭취 칼로리</p>
+      <div class="row"><span class="num big">${fmtKcal(total)}</span><span class="of">kcal</span></div>
+      <p class="small muted" style="margin:16px 0 0">${
+      mine ? `하루 목표가 아직 없어요. <a href="#" data-go="profile">내 정보</a>에서 설정하세요.` : "아직 목표를 설정하지 않았어요."
+    }</p>`;
   }
 
   const groups = MEAL_TYPES.map(([type, label]) => {
     const meals = u.meals.filter((m) => m.meal_type === type);
     if (!meals.length && type === "snack") return "";
-    const sum = meals.reduce((s, m) => s + m.calories_kcal, 0);
+    const sum = meals.reduce((acc, m) => acc + m.calories_kcal, 0);
     return `
       <div class="meal-group">
-        <h3><span>${label}</span><span class="muted">${meals.length ? `${fmtKcal(sum)} kcal` : ""}</span></h3>
+        <div class="group-head"><p class="eyebrow">${label}</p><span class="small muted">${meals.length ? `${fmtKcal(sum)} kcal` : ""}</span></div>
         ${
       meals.length
         ? meals.map((m) => `
           <button class="meal" data-meal="${m.id}">
-            ${m.photo_url ? `<img src="${esc(m.photo_url)}" alt="" loading="lazy">` : `<span class="ph">🍽️</span>`}
+            ${m.photo_url ? `<img class="thumb" src="${esc(m.photo_url)}" alt="" loading="lazy">` : `<span class="thumb ph">${ICON.dish}</span>`}
             <span class="info">
               <span class="name">${esc(m.food_name)}</span>
-              <span class="muted small">${hm(new Date(m.recorded_at))}${m.ai_estimated ? `<span class="badge">AI 추정</span>` : ""}</span>
+              <span class="meta small muted">${fmtTime(hm(new Date(m.recorded_at)))}${m.items.length > 1 ? ` · ${m.items.length}가지` : ""}${
+          m.ai_estimated ? `<span class="tag">AI 추정</span>` : ""
+        }</span>
             </span>
-            <span class="kcal">${fmtKcal(m.calories_kcal)} kcal</span>
+            <span class="kcal num">${fmtKcal(m.calories_kcal)} kcal</span>
           </button>`).join("")
-        : `<p class="muted small" style="margin:4px 0 8px">기록 없음</p>`
+        : `<p class="empty-line">아직 기록이 없어요</p>`
     }
       </div>`;
   }).join("");
@@ -371,48 +420,64 @@ function renderDay() {
   const photos = u.workout_photos.map((p) => `
     <div class="p">
       ${p.photo_url ? `<img src="${esc(p.photo_url)}" alt="운동 사진" data-zoom loading="lazy">` : ""}
-      ${mine ? `<button class="del" data-del-photo="${p.id}" aria-label="사진 삭제">✕</button>` : ""}
+      ${mine ? `<button class="del" data-del-photo="${p.id}" aria-label="사진 삭제">${ICON.close}</button>` : ""}
     </div>`).join("");
 
   $app.innerHTML = `
-    <div class="date-nav">
-      <button data-shift="-1" aria-label="전날">‹</button>
-      <span class="title">${fmtDate(d.date)}${d.date === ymd(new Date()) ? " · 오늘" : ""}<input type="date" value="${d.date}" aria-label="날짜 선택"></span>
-      <button data-shift="1" aria-label="다음날">›</button>
+    <div class="day-head">
+      <button class="icon-btn" data-shift="-1" aria-label="전날">${ICON.left}</button>
+      <div class="titles">
+        <p class="eyebrow">${d.date === ymd(new Date()) ? "오늘" : WEEKDAYS_LONG[date.getDay()]}</p>
+        <label class="date-pick">
+          <span class="h1">${date.getMonth() + 1}월 ${date.getDate()}일</span>
+          <input type="date" value="${d.date}" aria-label="날짜 선택">
+        </label>
+      </div>
+      <button class="icon-btn" data-shift="1" aria-label="다음날">${ICON.right}</button>
     </div>
-    <div class="user-tabs">
-      ${state.users.map((x) => `<button data-user="${x.user_key}" class="${x.user_key === key ? "on" : ""}">${esc(x.name)}</button>`).join("")}
+
+    <div class="pills fill user-switch">
+      ${state.users.map((x) => `<button class="pill ${x.user_key === key ? "on" : ""}" data-user="${x.user_key}">${esc(x.name)}</button>`).join("")}
     </div>
-    <div class="card summary">${summary}</div>
-    <div class="card">
-      ${groups}
+
+    <div class="card summary" style="margin-top:16px">${summary}</div>
+
+    <section class="section">
+      <div class="section-head"><h2 class="h2">식사</h2></div>
+      <div class="card">${groups}</div>
       ${
     mine
-      ? `<div class="add-row">
-             <button class="btn primary" data-add="photo">📷 사진으로 기록</button>
-             <button class="btn" data-add="manual">✏️ 직접 입력</button>
+      ? `<div class="btn-stack" style="margin-top:16px">
+             <button class="btn primary block" data-add="photo">${ICON.camera}사진으로 기록</button>
+             <button class="btn outline block" data-add="manual">직접 입력</button>
            </div>`
       : ""
   }
-    </div>
-    <div class="card">
-      <div class="workout-head">
-        <h2 style="margin:0">💪 운동</h2>
-        ${
+    </section>
+
+    <section class="section">
+      <div class="band sage">
+        <div class="workout-head">
+          <h2 class="h2">운동</h2>
+          ${
     mine
-      ? `<label class="switch"><input type="checkbox" id="workout-toggle" ${u.worked_out ? "checked" : ""}><span></span></label>`
-      : `<span class="${u.worked_out ? "t-green" : "muted"}">${u.worked_out ? "운동했어요" : "기록 없음"}</span>`
+      ? `<label class="switch" aria-label="운동한 날로 표시"><input type="checkbox" id="workout-toggle" ${u.worked_out ? "checked" : ""}><span></span></label>`
+      : `<span class="small">${u.worked_out ? "운동했어요" : "기록 없음"}</span>`
   }
+        </div>
+        <p class="small" style="margin:8px 0 0;color:var(--stone)">${
+    u.worked_out ? "운동한 날로 기록됐어요." : mine ? "운동했다면 켜거나 사진을 올려 주세요." : ""
+  }</p>
+        ${photos ? `<div class="photos">${photos}</div>` : ""}
+        ${mine ? `<button class="btn outline block" style="margin-top:20px" data-add="workout">운동 사진 올리기</button>` : ""}
       </div>
-      ${photos ? `<div class="photos">${photos}</div>` : ""}
-      ${mine ? `<button class="btn block" style="margin-top:12px" data-add="workout">+ 운동 사진 올리기</button>` : ""}
-    </div>`;
+    </section>`;
 
   $app.querySelectorAll("[data-shift]").forEach((b) => b.addEventListener("click", () => {
     state.date = addDays(state.date, Number(b.dataset.shift));
     refresh();
   }));
-  $app.querySelector(".date-nav input").addEventListener("change", (e) => {
+  $app.querySelector(".date-pick input").addEventListener("change", (e) => {
     if (e.target.value) {
       state.date = e.target.value;
       refresh();
@@ -435,8 +500,7 @@ function renderDay() {
   $app.querySelector("[data-add=photo]")?.addEventListener("click", addMealFromPhoto);
   $app.querySelector("[data-add=manual]")?.addEventListener("click", () => {
     const now = new Date();
-    const at = state.date === ymd(now) ? now : new Date(`${state.date}T12:00`);
-    openMealEditor({ draft: { date: state.date, time: hm(at), meal_type: guessMealType(at) } });
+    openMealEditor({ draft: { date: ymd(now), time: hm(now), meal_type: guessMealType(now) } });
   });
   $app.querySelector("[data-add=workout]")?.addEventListener("click", addWorkoutPhotos);
   $app.querySelector("#workout-toggle")?.addEventListener("change", (e) => toggleWorkout(e.target));
@@ -459,7 +523,7 @@ $lightbox.addEventListener("click", () => $lightbox.close());
 
 async function toggleWorkout(input) {
   const on = input.checked;
-  if (!on && state.day.users[state.me].workout_photos.length && !confirm("운동 체크를 끄면 이 날의 운동 사진도 삭제됩니다. 계속할까요?")) {
+  if (!on && state.day.users[state.me].workout_photos.length && !confirm("운동 표시를 끄면 이 날의 운동 사진도 삭제됩니다. 계속할까요?")) {
     input.checked = true;
     return;
   }
@@ -492,7 +556,7 @@ async function addWorkoutPhotos() {
       console.error(e);
     }
   }
-  const where = [...dates].sort().map(fmtDate).join(", ");
+  const where = [...dates].sort().map(relDay).join(", ");
   toast(failed ? `${files.length - failed}장 올림, ${failed}장 실패` : `${where} 운동 기록에 추가했어요`);
   if (dates.size === 1 && !dates.has(state.date)) state.date = [...dates][0];
   refresh({ silent: true });
@@ -521,48 +585,119 @@ function openMealEditor({ meal, draft }) {
       date: meal.date,
       time: hm(new Date(meal.recorded_at)),
       meal_type: meal.meal_type,
-      food_name: meal.food_name,
-      calories_kcal: meal.calories_kcal,
+      items: meal.items.map((i) => ({ name: i.name, kcal: String(i.calories_kcal) })),
       photo_url: meal.photo_url,
       ai_estimated: meal.ai_estimated,
     }
-    : { food_name: "", calories_kcal: "", ...draft };
-  let aiCalories = null;
+    : { items: [{ name: "", kcal: "" }], ...draft };
+  let items = d.items;
+  let mealType = d.meal_type;
+  let aiTotal = null;
   const previewUrl = d.photo ? URL.createObjectURL(d.photo) : d.photo_url;
 
   $modal.innerHTML = `
     <div class="inner">
-      <h2>${editing ? "식사 기록 수정" : "식사 기록"}</h2>
+      <div class="modal-head">
+        <h2 class="h2" tabindex="-1" autofocus>${editing ? "식사 수정" : "식사 기록"}</h2>
+        <button type="button" class="icon-btn" id="meal-close" aria-label="닫기">${ICON.close}</button>
+      </div>
       ${previewUrl ? `<img class="preview" src="${esc(previewUrl)}" alt="">` : ""}
-      <div class="analysis" id="analysis" ${d.analyzing ? "" : "hidden"}><span class="spinner"></span>사진을 분석하고 있어요…</div>
-      <form id="meal-form">
-        <div class="row">
-          <label class="field"><span>날짜</span><input type="date" name="date" value="${d.date}" required></label>
-          <label class="field"><span>시간</span><input type="time" name="time" value="${d.time}" required></label>
+      <div class="ai-box" id="analysis" ${d.analyzing ? "" : "hidden"}>
+        <p class="eyebrow">AI 분석</p><span class="spinner"></span>사진 속 음식을 살펴보고 있어요…
+      </div>
+      <form id="meal-form" novalidate>
+        <div class="field">
+          <span class="label">언제</span>
+          <div class="when">
+            <span id="when-text"></span>
+            <button type="button" class="btn text" id="when-toggle">변경</button>
+          </div>
+          <div class="when-edit" id="when-edit" hidden>
+            <label><span class="label small muted">날짜</span><input type="date" name="date" value="${d.date}"></label>
+            <label><span class="label small muted">시간</span><input type="time" name="time" value="${d.time}"></label>
+          </div>
         </div>
-        <label class="field"><span>끼니</span>
-          <div class="seg" id="meal-type">${MEAL_TYPES.map(([t, l]) => `<button type="button" data-t="${t}" class="${t === d.meal_type ? "on" : ""}">${l}</button>`).join("")}</div>
-        </label>
-        <label class="field"><span>음식</span><input type="text" name="food_name" value="${esc(d.food_name)}" maxlength="100" required placeholder="예: 김치찌개, 공기밥"></label>
-        <label class="field"><span>칼로리 (kcal)</span><input type="number" name="calories_kcal" value="${esc(d.calories_kcal)}" min="0" max="20000" step="1" inputmode="numeric" required></label>
-        <p class="estimate-note" id="estimate-note" ${d.ai_estimated ? "" : "hidden"}>⚠️ AI가 사진으로 추정한 값이에요. 실제와 다를 수 있으니 확인 후 수정하세요.</p>
-        <div class="row">
-          ${editing ? `<button type="button" class="btn danger" id="meal-delete">삭제</button>` : ""}
-          <button type="button" class="btn" id="meal-cancel">취소</button>
+        <div class="field">
+          <span class="label">끼니</span>
+          <div class="pills fill" id="meal-type">${
+    MEAL_TYPES.map(([t, l]) => `<button type="button" class="pill ${t === mealType ? "on" : ""}" data-t="${t}">${l}</button>`).join("")
+  }</div>
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <span class="label">음식</span>
+          <div class="items" id="items"></div>
+          <button type="button" class="btn text" id="add-item" style="padding-left:0">+ 음식 추가</button>
+          <div class="total"><span class="eyebrow" style="margin:0">합계</span><span><span class="num" id="total">0</span> kcal</span></div>
+          <p class="note" id="estimate-note" ${d.ai_estimated ? "" : "hidden"}>AI가 사진으로 추정한 값이에요. 실제와 다를 수 있으니 확인 후 수정하세요.</p>
+        </div>
+        <p class="error small" id="meal-error" style="margin:12px 0 0"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn outline" id="meal-cancel">취소</button>
           <button type="submit" class="btn primary">저장</button>
         </div>
-        <p class="error small" id="meal-error"></p>
+        ${editing ? `<div class="modal-foot"><button type="button" class="btn text danger" id="meal-delete">이 기록 삭제</button></div>` : ""}
       </form>
     </div>`;
   $modal.showModal();
+  $modal.querySelector(".modal-head .h2").focus();
 
   const form = $modal.querySelector("#meal-form");
-  let mealType = d.meal_type;
-  $modal.querySelectorAll("#meal-type button").forEach((b) => b.addEventListener("click", () => {
+  const $items = $modal.querySelector("#items");
+  const $total = $modal.querySelector("#total");
+  const $whenText = $modal.querySelector("#when-text");
+
+  const updateWhen = () => {
+    const date = form.date.value || d.date;
+    const time = form.time.value || d.time;
+    $whenText.textContent = `${relDay(date)} ${fmtTime(time)}`;
+  };
+  const totalKcal = () => items.reduce((sum, i) => sum + (Number(i.kcal) || 0), 0);
+  const updateTotal = () => ($total.textContent = fmtKcal(totalKcal()));
+  const renderItems = () => {
+    $items.innerHTML = items.map((it, i) => `
+      <div class="item-row" data-i="${i}">
+        <input type="text" class="item-name" value="${esc(it.name)}" placeholder="예: 김치찌개" maxlength="50" aria-label="음식 이름">
+        <span class="kcal-wrap"><input type="number" class="item-kcal" value="${esc(it.kcal)}" min="0" max="10000" step="1" inputmode="numeric" placeholder="0" aria-label="칼로리"></span>
+        <button type="button" class="remove" aria-label="삭제" ${items.length === 1 ? "disabled" : ""}>${ICON.close}</button>
+      </div>`).join("");
+    updateTotal();
+  };
+  updateWhen();
+  renderItems();
+
+  $items.addEventListener("input", (e) => {
+    const row = e.target.closest(".item-row");
+    if (!row) return;
+    const it = items[Number(row.dataset.i)];
+    if (e.target.classList.contains("item-name")) it.name = e.target.value;
+    else it.kcal = e.target.value;
+    e.target.classList.remove("invalid");
+    updateTotal();
+  });
+  $items.addEventListener("click", (e) => {
+    const btn = e.target.closest(".remove");
+    if (!btn || items.length === 1) return;
+    items.splice(Number(btn.closest(".item-row").dataset.i), 1);
+    renderItems();
+  });
+  $modal.querySelector("#add-item").addEventListener("click", () => {
+    items.push({ name: "", kcal: "" });
+    renderItems();
+    $items.querySelector(".item-row:last-child .item-name").focus();
+  });
+  $modal.querySelector("#when-toggle").addEventListener("click", (e) => {
+    const box = $modal.querySelector("#when-edit");
+    box.hidden = !box.hidden;
+    e.target.textContent = box.hidden ? "변경" : "닫기";
+  });
+  form.date.addEventListener("change", updateWhen);
+  form.time.addEventListener("change", updateWhen);
+  $modal.querySelectorAll("#meal-type .pill").forEach((b) => b.addEventListener("click", () => {
     mealType = b.dataset.t;
-    $modal.querySelectorAll("#meal-type button").forEach((x) => x.classList.toggle("on", x === b));
+    $modal.querySelectorAll("#meal-type .pill").forEach((x) => x.classList.toggle("on", x === b));
   }));
   $modal.querySelector("#meal-cancel").addEventListener("click", () => $modal.close());
+  $modal.querySelector("#meal-close").addEventListener("click", () => $modal.close());
 
   if (d.analyzing) {
     const box = $modal.querySelector("#analysis");
@@ -571,49 +706,64 @@ function openMealEditor({ meal, draft }) {
     api("/analyze", { method: "POST", form: fd }).then((r) => {
       if (!$modal.open) return;
       if (!r.is_food) {
-        box.innerHTML = `🤔 음식이 보이지 않아요. 직접 입력해 주세요.`;
+        box.innerHTML = `<p class="eyebrow">AI 분석</p>음식이 보이지 않아요. 직접 입력해 주세요.`;
         return;
       }
-      form.food_name.value = r.food_name;
-      form.calories_kcal.value = r.calories_kcal;
-      aiCalories = r.calories_kcal;
+      const found = r.items.length ? r.items : [{ name: r.food_name, calories_kcal: r.calories_kcal }];
+      items = found.map((i) => ({ name: i.name, kcal: String(i.calories_kcal) }));
+      aiTotal = totalKcal();
+      renderItems();
       $modal.querySelector("#estimate-note").hidden = false;
-      box.innerHTML = `<b>${esc(r.food_name)}</b> · 약 ${fmtKcal(r.calories_kcal)} kcal
-        ${r.items.length > 1 ? `<ul>${r.items.map((i) => `<li>${esc(i.name)} ${fmtKcal(i.calories_kcal)} kcal</li>`).join("")}</ul>` : ""}
-        <div class="muted small" style="margin-top:4px">${esc(r.description)}</div>`;
+      box.innerHTML = `<p class="eyebrow">AI 분석</p>${esc(r.description)}`;
     }).catch((e) => {
-      if ($modal.open) box.innerHTML = `<span class="error">분석 실패: ${esc(e.message)}</span><br>음식과 칼로리를 직접 입력해 주세요.`;
+      if ($modal.open) box.innerHTML = `<p class="eyebrow">AI 분석</p><span class="error">${esc(e.message)}</span><br>음식과 칼로리를 직접 입력해 주세요.`;
     });
   }
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const btn = form.querySelector("button[type=submit]");
     const err = $modal.querySelector("#meal-error");
-    const recordedAt = new Date(`${form.date.value}T${form.time.value}`);
-    const calories = Math.round(Number(form.calories_kcal.value));
-    btn.disabled = true;
     err.textContent = "";
+    // 이름·칼로리가 모두 빈 줄은 무시한다
+    const filled = items.map((it, i) => ({ ...it, i })).filter((it) => it.name.trim() || it.kcal !== "");
+    let bad = false;
+    for (const it of filled) {
+      const row = $items.querySelector(`[data-i="${it.i}"]`);
+      if (!it.name.trim()) {
+        row.querySelector(".item-name").classList.add("invalid");
+        bad = true;
+      }
+      const k = Number(it.kcal);
+      if (it.kcal === "" || !Number.isFinite(k) || k < 0 || k > 10000) {
+        row.querySelector(".item-kcal").classList.add("invalid");
+        bad = true;
+      }
+    }
+    if (!filled.length) {
+      err.textContent = "음식을 하나 이상 입력해 주세요.";
+      return;
+    }
+    if (bad) {
+      err.textContent = "음식 이름과 칼로리(0~10,000)를 확인해 주세요.";
+      return;
+    }
+    const payloadItems = filled.map((it) => ({ name: it.name.trim(), calories_kcal: Math.round(Number(it.kcal)) }));
+    const recordedAt = new Date(`${form.date.value}T${form.time.value}`);
+    const btn = form.querySelector("button[type=submit]");
+    btn.disabled = true;
     try {
       if (editing) {
         await api(`/meals/${meal.id}`, {
           method: "PATCH",
-          json: {
-            date: form.date.value,
-            recorded_at: recordedAt.toISOString(),
-            meal_type: mealType,
-            food_name: form.food_name.value,
-            calories_kcal: calories,
-          },
+          json: { date: form.date.value, recorded_at: recordedAt.toISOString(), meal_type: mealType, items: payloadItems },
         });
       } else {
         const fd = new FormData();
         fd.set("date", form.date.value);
         fd.set("recorded_at", recordedAt.toISOString());
         fd.set("meal_type", mealType);
-        fd.set("food_name", form.food_name.value);
-        fd.set("calories_kcal", String(calories));
-        fd.set("ai_estimated", String(aiCalories !== null && aiCalories === calories));
+        fd.set("items", JSON.stringify(payloadItems));
+        fd.set("ai_estimated", String(aiTotal !== null && aiTotal === totalKcal()));
         if (d.photo) fd.set("photo", d.photo, "meal.jpg");
         await api("/meals", { method: "POST", form: fd });
       }
@@ -654,31 +804,33 @@ function renderCalendar() {
     const date = `${state.month}-${pad(day)}`;
     const info = state.cal.days[date];
     const rows = !info ? "" : state.users.map((u) => {
-      const s = info?.[u.user_key];
-      return `<span class="u"><span class="dot ${statusClass(s?.status)}"></span>${esc(u.name.slice(0, 1))}${
-        s?.worked_out ? `<span class="gym">💪</span>` : ""
-      }</span>`;
+      const s = info[u.user_key];
+      const k = statusKey(s?.status);
+      return `<span class="u"><span class="dot ${k ? `bg-${k}` : ""}"></span><span class="n ${s?.worked_out ? "worked" : ""}">${esc(u.name)}</span></span>`;
     }).join("");
     cells.push(`<button class="cell ${date === today ? "today" : ""}" data-date="${date}"><span class="d">${day}</span>${rows}</button>`);
   }
 
   $app.innerHTML = `
     <div class="cal-head">
-      <button data-month="-1" aria-label="이전 달">‹</button>
-      <span class="title">${y}년 ${m}월</span>
-      <button data-month="1" aria-label="다음 달">›</button>
+      <button class="icon-btn" data-month="-1" aria-label="이전 달">${ICON.left}</button>
+      <div class="center">
+        <p class="eyebrow">${y}</p>
+        <h1 class="h1">${m}월</h1>
+      </div>
+      <button class="icon-btn" data-month="1" aria-label="다음 달">${ICON.right}</button>
     </div>
     <div class="cal">
       ${WEEKDAYS.map((w) => `<div class="wd">${w}</div>`).join("")}
       ${cells.join("")}
     </div>
     <div class="legend">
-      <span><span class="dot s-green"></span>목표 110% 이하</span>
-      <span><span class="dot s-orange"></span>110~125%</span>
-      <span><span class="dot s-red"></span>125% 초과</span>
-      <span>💪 운동한 날</span>
+      <span><span class="dot bg-good"></span>목표 110% 이하</span>
+      <span><span class="dot bg-warn"></span>110~125%</span>
+      <span><span class="dot bg-bad"></span>125% 초과</span>
+      <span><span class="chip">이름</span>운동한 날</span>
     </div>
-    <p class="muted small">날짜를 누르면 그날의 식사·운동 기록을 볼 수 있어요.</p>`;
+    <p class="small muted" style="margin-top:12px">날짜를 누르면 그날의 식사·운동 기록을 볼 수 있어요.</p>`;
 
   $app.querySelectorAll("[data-month]").forEach((b) => b.addEventListener("click", () => {
     const d = new Date(y, m - 1 + Number(b.dataset.month), 1);
@@ -697,52 +849,101 @@ function calcBmr(sex, age, h, w) {
   return Math.round(10 * w + 6.25 * h - 5 * age + (sex === "male" ? 5 : -161));
 }
 
+// 한국인 영양소 섭취기준의 성인 에너지 필요추정량 (서버 logic.ts와 같은 식)
+const PA = {
+  male: { sedentary: 1.0, low: 1.11, active: 1.25, very_active: 1.48 },
+  female: { sedentary: 1.0, low: 1.12, active: 1.27, very_active: 1.45 },
+};
+function calcEer(sex, age, h, w, level) {
+  const pa = PA[sex][level];
+  const m = h / 100;
+  return Math.round(sex === "male" ? 662 - 9.53 * age + pa * (15.91 * w + 539.6 * m) : 354 - 6.91 * age + pa * (9.36 * w + 726 * m));
+}
+
 function renderProfile() {
   const p = myProfile() || {};
   let sex = p.sex || "";
+  let level = p.activity_level || "";
+  // 예전(기초대사량 기준) 목표는 권장섭취량 기준으로 다시 잡는다
+  let offset = p.activity_level ? p.goal_offset_kcal : 0;
+
   $app.innerHTML = `
-    <h1>${esc(userName(state.me))}님의 정보</h1>
-    <form class="card" id="profile-form">
-      <label class="field"><span>성별</span>
-        <div class="seg" id="sex">
-          <button type="button" data-sex="female" class="${sex === "female" ? "on" : ""}">여성</button>
-          <button type="button" data-sex="male" class="${sex === "male" ? "on" : ""}">남성</button>
+    <p class="eyebrow">내 정보</p>
+    <h1 class="h1">${esc(userName(state.me))}님의 목표</h1>
+    <p class="lead">하루 목표는 권장섭취량을 기준으로 정해요.</p>
+
+    <form id="profile-form" class="section" style="margin-top:32px">
+      <div class="card">
+        <div class="field">
+          <span class="label">성별</span>
+          <div class="pills fill" id="sex">
+            <button type="button" class="pill ${sex === "female" ? "on" : ""}" data-sex="female">여성</button>
+            <button type="button" class="pill ${sex === "male" ? "on" : ""}" data-sex="male">남성</button>
+          </div>
         </div>
-      </label>
-      <div class="row">
-        <label class="field"><span>나이</span><input type="number" name="age" value="${esc(p.age)}" min="10" max="120" inputmode="numeric" required></label>
-        <label class="field"><span>키 (cm)</span><input type="number" name="height_cm" value="${esc(p.height_cm)}" min="50" max="250" step="0.1" inputmode="decimal" required></label>
-        <label class="field"><span>몸무게 (kg)</span><input type="number" name="weight_kg" value="${esc(p.weight_kg)}" min="20" max="300" step="0.1" inputmode="decimal" required></label>
+        <div class="grid-3">
+          <label class="field"><span class="label">나이</span><input type="number" name="age" value="${esc(p.age)}" min="19" max="120" inputmode="numeric"></label>
+          <label class="field"><span class="label">키 (cm)</span><input type="number" name="height_cm" value="${esc(p.height_cm)}" min="50" max="250" step="0.1" inputmode="decimal"></label>
+          <label class="field"><span class="label">몸무게 (kg)</span><input type="number" name="weight_kg" value="${esc(p.weight_kg)}" min="20" max="300" step="0.1" inputmode="decimal"></label>
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <span class="label">평소 활동 수준</span>
+          <div class="choices">${
+    ACTIVITY.map(([k, t, desc]) => `<button type="button" class="choice ${k === level ? "on" : ""}" data-level="${k}"><b>${t}</b><span>${desc}</span></button>`).join("")
+  }</div>
+        </div>
       </div>
-      <label class="field"><span>목표: 기초대사량 대비 (kcal)</span>
-        <input type="number" name="goal_offset_kcal" value="${esc(p.goal_offset_kcal ?? -500)}" min="-2000" max="2000" step="10" inputmode="numeric" required>
-        <div class="chips">${[-700, -500, -300, 0, 200].map((v) => `<button type="button" data-offset="${v}">${v > 0 ? "+" : ""}${v}</button>`).join("")}</div>
-      </label>
-      <div class="calc">
-        <div><span class="muted small">기초대사량</span><b id="bmr">-</b></div>
-        <div><span class="muted small">하루 목표</span><b id="target">-</b></div>
+
+      <div class="card">
+        <div class="stats">
+          <div class="stat"><span class="num v" id="bmr">–</span><span class="k">기초대사량</span></div>
+          <div class="stat"><span class="num v" id="eer">–</span><span class="k">권장섭취량</span></div>
+          <div class="stat main"><span class="num v" id="target">–</span><span class="k">하루 목표</span></div>
+        </div>
+        <p class="small muted center" style="margin:12px 0 24px">kcal / 일</p>
+        <div class="field">
+          <span class="label">목표 조정 (kcal)</span>
+          <div class="pills fill" id="presets">${GOAL_PRESETS.map(([v, l]) => `<button type="button" class="pill" data-offset="${v}">${l}</button>`).join("")}</div>
+        </div>
+        <label class="field" style="margin-bottom:0"><span class="label">권장섭취량에서 더하거나 뺄 칼로리 (kcal)</span>
+          <input type="number" name="goal_offset_kcal" value="${esc(offset)}" min="-2000" max="2000" step="10" inputmode="numeric">
+        </label>
+        <p class="small muted" style="margin:16px 0 0">권장섭취량은 한국인 영양소 섭취기준의 에너지 필요추정량 공식으로 계산해요. 운동 소모 칼로리는 목표에 더하지 않아요.</p>
       </div>
-      <p class="muted small">기초대사량은 Mifflin-St Jeor 공식으로 계산합니다. 운동 소모 칼로리는 목표에 더하지 않습니다.</p>
-      <button class="btn primary block" type="submit">저장</button>
-      <p class="error small" id="profile-error"></p>
-    </form>
-    <button class="btn block" id="logout">로그아웃</button>`;
+
+      <p class="error small" id="profile-error" style="margin:16px 0 0"></p>
+      <div class="btn-stack" style="margin-top:16px">
+        <button class="btn primary block" type="submit">저장</button>
+        <button class="btn outline block" type="button" id="logout">로그아웃</button>
+      </div>
+    </form>`;
 
   const form = $app.querySelector("#profile-form");
+  const values = () => ({
+    age: Number(form.age.value),
+    h: Number(form.height_cm.value),
+    w: Number(form.weight_kg.value),
+    offset: Number(form.goal_offset_kcal.value) || 0,
+  });
   const update = () => {
-    const age = Number(form.age.value), h = Number(form.height_cm.value), w = Number(form.weight_kg.value);
-    const offset = Number(form.goal_offset_kcal.value);
+    const { age, h, w, offset: o } = values();
     const ok = sex && age && h && w;
-    const bmr = ok ? calcBmr(sex, age, h, w) : null;
-    $app.querySelector("#bmr").textContent = bmr ? `${fmtKcal(bmr)} kcal` : "-";
-    $app.querySelector("#target").textContent = bmr ? `${fmtKcal(Math.max(0, bmr + offset))} kcal` : "-";
-    $app.querySelectorAll("[data-offset]").forEach((b) => b.classList.toggle("on", Number(b.dataset.offset) === offset));
+    $app.querySelector("#bmr").textContent = ok ? fmtKcal(calcBmr(sex, age, h, w)) : "–";
+    const eer = ok && level ? calcEer(sex, age, h, w, level) : null;
+    $app.querySelector("#eer").textContent = eer ? fmtKcal(eer) : "–";
+    $app.querySelector("#target").textContent = eer ? fmtKcal(Math.max(0, eer + o)) : "–";
+    $app.querySelectorAll("[data-offset]").forEach((b) => b.classList.toggle("on", Number(b.dataset.offset) === o));
   };
   update();
   form.addEventListener("input", update);
   $app.querySelectorAll("[data-sex]").forEach((b) => b.addEventListener("click", () => {
     sex = b.dataset.sex;
     $app.querySelectorAll("[data-sex]").forEach((x) => x.classList.toggle("on", x === b));
+    update();
+  }));
+  $app.querySelectorAll("[data-level]").forEach((b) => b.addEventListener("click", () => {
+    level = b.dataset.level;
+    $app.querySelectorAll("[data-level]").forEach((x) => x.classList.toggle("on", x === b));
     update();
   }));
   $app.querySelectorAll("[data-offset]").forEach((b) => b.addEventListener("click", () => {
@@ -752,22 +953,16 @@ function renderProfile() {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const err = $app.querySelector("#profile-error");
-    if (!sex) {
-      err.textContent = "성별을 선택해 주세요.";
-      return;
-    }
+    const { age, h, w, offset: o } = values();
+    if (!sex) return (err.textContent = "성별을 선택해 주세요.");
+    if (!age || !h || !w) return (err.textContent = "나이·키·몸무게를 입력해 주세요.");
+    if (!level) return (err.textContent = "평소 활동 수준을 선택해 주세요.");
     const btn = form.querySelector("button[type=submit]");
     btn.disabled = true;
     try {
       const { profile } = await api("/profile", {
         method: "PUT",
-        json: {
-          sex,
-          age: Number(form.age.value),
-          height_cm: Number(form.height_cm.value),
-          weight_kg: Number(form.weight_kg.value),
-          goal_offset_kcal: Number(form.goal_offset_kcal.value),
-        },
+        json: { sex, age, height_cm: h, weight_kg: w, activity_level: level, goal_offset_kcal: o },
       });
       state.users.find((u) => u.user_key === state.me).profile = profile;
       toast(`저장했어요. 하루 목표 ${fmtKcal(profile.daily_target_kcal)} kcal`);
@@ -787,9 +982,9 @@ function renderProfile() {
 
 async function start() {
   if (!API) {
-    $app.innerHTML = `<h1>🍽️ 칼로리 노트</h1><div class="card">
-      <p>서버 주소가 설정되지 않았어요.</p>
-      <p class="muted small">GitHub 저장소 Settings → Secrets and variables → Actions → Variables에
+    $app.innerHTML = `<p class="eyebrow">Calorie Note</p><div class="card">
+      <p style="margin-top:0">서버 주소가 설정되지 않았어요.</p>
+      <p class="muted small" style="margin-bottom:0">GitHub 저장소 Settings → Secrets and variables → Actions → Variables에
       <code>SUPABASE_PROJECT_REF</code>를 추가한 뒤 Pages 배포를 다시 실행하세요. (README 참고)</p></div>`;
     return;
   }
@@ -801,7 +996,7 @@ async function start() {
     state.users = me.users;
     state.viewUser = me.user_key;
     state.date = me.today || state.date;
-    go(myProfile()?.daily_target_kcal ? "day" : "profile");
+    go(needsProfile() ? "profile" : "day");
   } catch (e) {
     if (state.token) $app.innerHTML = `<div class="card error">${esc(e.message)}</div>`;
   }

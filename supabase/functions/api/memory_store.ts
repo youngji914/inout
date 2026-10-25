@@ -10,8 +10,10 @@ export function memoryStore() {
     age: null,
     height_cm: null,
     weight_kg: null,
+    activity_level: null,
     bmr_kcal: null,
-    goal_offset_kcal: -500,
+    eer_kcal: null,
+    goal_offset_kcal: 0,
     daily_target_kcal: null,
   }));
   const targets: TargetRow[] = [];

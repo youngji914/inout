@@ -1,7 +1,7 @@
 // DB·사진 저장소 접근. handler.ts는 Store 인터페이스에만 의존하고, 테스트에서는 메모리 구현을 쓴다.
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { Sex, TargetRow, UserKey } from "./logic.ts";
+import type { ActivityLevel, Sex, TargetRow, UserKey } from "./logic.ts";
 
 export interface Profile {
   user_key: UserKey;
@@ -9,12 +9,19 @@ export interface Profile {
   age: number | null;
   height_cm: number | null;
   weight_kg: number | null;
+  activity_level: ActivityLevel | null;
   bmr_kcal: number | null;
+  eer_kcal: number | null;
   goal_offset_kcal: number;
   daily_target_kcal: number | null;
 }
 
 export type MealType = "breakfast" | "lunch" | "dinner" | "snack";
+
+export interface MealItem {
+  name: string;
+  calories_kcal: number;
+}
 
 export interface Meal {
   id: string;
@@ -25,11 +32,14 @@ export interface Meal {
   photo_path: string | null;
   food_name: string;
   calories_kcal: number;
+  items: MealItem[];
   ai_estimated: boolean;
 }
 
 export type NewMeal = Omit<Meal, "id">;
-export type MealPatch = Partial<Pick<Meal, "recorded_at" | "date" | "meal_type" | "food_name" | "calories_kcal">>;
+export type MealPatch = Partial<
+  Pick<Meal, "recorded_at" | "date" | "meal_type" | "food_name" | "calories_kcal" | "items">
+>;
 
 export interface Workout {
   user_key: UserKey;
@@ -100,14 +110,16 @@ export function supabaseStore(): Store {
   const db: SupabaseClient = createClient(Deno.env.get("SUPABASE_URL")!, secretKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const MEAL_COLS = "id,user_key,recorded_at,date,meal_type,photo_path,food_name,calories_kcal,ai_estimated";
+  const MEAL_COLS = "id,user_key,recorded_at,date,meal_type,photo_path,food_name,calories_kcal,items,ai_estimated";
   const PHOTO_COLS = "id,user_key,date,recorded_at,photo_path";
 
   return {
     async getProfiles() {
       return check(
         await db.from("profiles")
-          .select("user_key,sex,age,height_cm,weight_kg,bmr_kcal,goal_offset_kcal,daily_target_kcal")
+          .select(
+            "user_key,sex,age,height_cm,weight_kg,activity_level,bmr_kcal,eer_kcal,goal_offset_kcal,daily_target_kcal",
+          )
           .order("user_key"),
       ) as Profile[];
     },

@@ -12,6 +12,25 @@ export function calcBmr(sex: Sex, age: number, heightCm: number, weightKg: numbe
   return Math.round(base + (sex === "male" ? 5 : -161));
 }
 
+export type ActivityLevel = "sedentary" | "low" | "active" | "very_active";
+export const ACTIVITY_LEVELS: ActivityLevel[] = ["sedentary", "low", "active", "very_active"];
+
+// 한국인 영양소 섭취기준(2020)의 성인 에너지 필요추정량 신체활동계수
+const PA: Record<Sex, Record<ActivityLevel, number>> = {
+  male: { sedentary: 1.0, low: 1.11, active: 1.25, very_active: 1.48 },
+  female: { sedentary: 1.0, low: 1.12, active: 1.27, very_active: 1.45 },
+};
+
+/** 권장섭취량: 한국인 영양소 섭취기준의 성인 에너지 필요추정량(kcal/일). */
+export function calcEer(sex: Sex, age: number, heightCm: number, weightKg: number, level: ActivityLevel): number {
+  const h = heightCm / 100;
+  const pa = PA[sex][level];
+  const eer = sex === "male"
+    ? 662 - 9.53 * age + pa * (15.91 * weightKg + 539.6 * h)
+    : 354 - 6.91 * age + pa * (9.36 * weightKg + 726 * h);
+  return Math.round(eer);
+}
+
 // 달력 색상 구간: 섭취량 / 목표
 //   목표의 110% 이하 → 초록, 125% 이하 → 주황, 그 이상 → 빨강
 export const GREEN_MAX_RATIO = 1.1;

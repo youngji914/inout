@@ -1,7 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import type { Analysis } from "./analyze.ts";
 import { type Config, createHandler } from "./handler.ts";
-import { calcBmr, dayStatus, monthRange, signToken, targetOn, todayIn, verifyToken } from "./logic.ts";
+import { calcBmr, calcEer, dayStatus, monthRange, signToken, targetOn, todayIn, verifyToken } from "./logic.ts";
 import type { TargetRow, UserKey } from "./logic.ts";
 import { memoryStore } from "./memory_store.ts";
 
@@ -10,6 +10,12 @@ import { memoryStore } from "./memory_store.ts";
 Deno.test("BMR uses Mifflin-St Jeor", () => {
   assertEquals(calcBmr("male", 30, 175, 70), 1649);
   assertEquals(calcBmr("female", 30, 160, 55), 1239);
+});
+
+Deno.test("recommended intake uses the KDRI estimated energy requirement", () => {
+  assertEquals(calcEer("female", 30, 160, 55, "low"), 2024);
+  assertEquals(calcEer("male", 30, 175, 70, "sedentary"), 2434);
+  assertEquals(calcEer("male", 30, 175, 70, "active"), 2949);
 });
 
 Deno.test("day status thresholds", () => {
@@ -95,8 +101,7 @@ const LUNCH = {
   recorded_at: "2026-10-25T03:30:00Z",
   date: "2026-10-25",
   meal_type: "lunch",
-  food_name: "김치찌개, 공기밥",
-  calories_kcal: "750",
+  items: JSON.stringify([{ name: "김치찌개", calories_kcal: 450 }, { name: "공기밥", calories_kcal: 300 }]),
   ai_estimated: "true",
 };
 
@@ -124,16 +129,17 @@ Deno.test("profile save computes BMR and daily target", async () => {
   const token = await t.login("user1", "1111");
   const res = await t.call("PUT", "/profile", {
     token,
-    body: { sex: "female", age: 30, height_cm: 160, weight_kg: 55, goal_offset_kcal: -300 },
+    body: { sex: "female", age: 30, height_cm: 160, weight_kg: 55, activity_level: "low", goal_offset_kcal: -300 },
   });
   assertEquals(res.status, 200);
   const { profile } = await res.json();
   assertEquals(profile.bmr_kcal, 1239);
-  assertEquals(profile.daily_target_kcal, 939);
+  assertEquals(profile.eer_kcal, 2024);
+  assertEquals(profile.daily_target_kcal, 1724);
 
   const me = await (await t.call("GET", "/me", { token })).json();
   assertEquals(me.users[0].name, "영지");
-  assertEquals(me.users[0].profile.daily_target_kcal, 939);
+  assertEquals(me.users[0].profile.daily_target_kcal, 1724);
 });
 
 Deno.test("analyze returns the model result", async () => {
@@ -150,7 +156,7 @@ Deno.test("meal lifecycle: create, day view, edit, ownership, delete", async () 
   const sh = await t.login("user2", "2222");
   await t.call("PUT", "/profile", {
     token: yj,
-    body: { sex: "female", age: 30, height_cm: 160, weight_kg: 55, goal_offset_kcal: 0 },
+    body: { sex: "female", age: 30, height_cm: 160, weight_kg: 55, activity_level: "low", goal_offset_kcal: 0 },
   });
 
   const created = await t.call("POST", "/meals", { token: yj, form: mealForm(LUNCH) });
@@ -160,17 +166,22 @@ Deno.test("meal lifecycle: create, day view, edit, ownership, delete", async () 
 
   const day = await (await t.call("GET", "/day?date=2026-10-25", { token: sh })).json();
   assertEquals(day.users.user1.total_kcal, 750);
-  assertEquals(day.users.user1.target_kcal, 1239);
+  assertEquals(day.users.user1.target_kcal, 2024);
+  assertEquals(day.users.user1.meals[0].food_name, "김치찌개, 공기밥");
+  assertEquals(day.users.user1.meals[0].items.length, 2);
   assertEquals(day.users.user1.status, "green");
   assert(day.users.user1.meals[0].photo_url.startsWith("https://signed/user1/meals/"));
   assertEquals(day.users.user2.meals.length, 0);
 
-  assertEquals((await t.call("PATCH", `/meals/${meal.id}`, { token: sh, body: { calories_kcal: 1 } })).status, 403);
+  assertEquals((await t.call("PATCH", `/meals/${meal.id}`, { token: sh, body: { meal_type: "dinner" } })).status, 403);
   const edited = await t.call("PATCH", `/meals/${meal.id}`, {
     token: yj,
-    body: { calories_kcal: 1450, meal_type: "dinner" },
+    body: {
+      items: [{ name: "삼겹살", calories_kcal: 1800 }, { name: "냉면", calories_kcal: 600 }],
+      meal_type: "dinner",
+    },
   });
-  assertEquals((await edited.json()).meal.calories_kcal, 1450);
+  assertEquals((await edited.json()).meal.calories_kcal, 2400);
 
   const cal = await (await t.call("GET", "/calendar?month=2026-10", { token: yj })).json();
   assertEquals(cal.days["2026-10-25"].user1.status, "orange");
@@ -188,8 +199,13 @@ Deno.test("manual meal without photo and validation errors", async () => {
   assertEquals(ok.status, 201);
   assertEquals((await ok.json()).meal.photo_path, null);
 
-  const bad = await t.call("POST", "/meals", { token, form: mealForm({ ...LUNCH, calories_kcal: "-5" }, false) });
+  const bad = await t.call("POST", "/meals", {
+    token,
+    form: mealForm({ ...LUNCH, items: JSON.stringify([{ name: "밥", calories_kcal: -5 }]) }, false),
+  });
   assertEquals(bad.status, 400);
+  const empty = await t.call("POST", "/meals", { token, form: mealForm({ ...LUNCH, items: "[]" }, false) });
+  assertEquals(empty.status, 400);
   const badType = await t.call("POST", "/meals", { token, form: mealForm({ ...LUNCH, meal_type: "brunch" }, false) });
   assertEquals(badType.status, 400);
 });
