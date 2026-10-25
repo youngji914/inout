@@ -21,6 +21,10 @@ export type MealType = "breakfast" | "lunch" | "dinner" | "snack";
 export interface MealItem {
   name: string;
   calories_kcal: number;
+  // AI가 추정했을 때만 있다
+  carbs_g?: number;
+  protein_g?: number;
+  fat_g?: number;
 }
 
 export interface Meal {

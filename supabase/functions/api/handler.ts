@@ -1,15 +1,17 @@
-// HTTP 라우팅·인증·입력 검증. 저장소(Store)와 사진 분석(Analyzer)은 주입받는다.
+// HTTP 라우팅·인증·입력 검증. 저장소(Store)와 음식 AI(FoodAi)는 주입받는다.
 
-import type { Analyzer } from "./analyze.ts";
+import type { FoodAi } from "./analyze.ts";
 import { HttpError } from "./http.ts";
 import {
   ACTIVITY_LEVELS,
   type ActivityLevel,
   calcBmr,
   calcEer,
+  dayFeedback,
   dayStatus,
   isDate,
   isMonth,
+  type Macros,
   monthRange,
   safeEqual,
   signToken,
@@ -141,7 +143,13 @@ function itemsField(v: unknown): Pick<Meal, "items" | "food_name" | "calories_kc
   const items: MealItem[] = raw.map((it) => {
     const name = typeof it?.name === "string" ? it.name.trim() : "";
     if (!name || name.length > 50) throw new HttpError(400, "음식 이름을 1~50자로 입력해 주세요.");
-    return { name, calories_kcal: int(it.calories_kcal, `${name} 칼로리`, 0, 10000) };
+    const item: MealItem = { name, calories_kcal: int(it.calories_kcal, `${name} 칼로리`, 0, 10000) };
+    if (["carbs_g", "protein_g", "fat_g"].every((k) => it[k] !== undefined && it[k] !== null)) {
+      item.carbs_g = num(it.carbs_g, `${name} 탄수화물`, 0, 2000);
+      item.protein_g = num(it.protein_g, `${name} 단백질`, 0, 2000);
+      item.fat_g = num(it.fat_g, `${name} 지방`, 0, 2000);
+    }
+    return item;
   });
   const joined = items.map((i) => i.name).join(", ");
   return {
@@ -151,12 +159,27 @@ function itemsField(v: unknown): Pick<Meal, "items" | "food_name" | "calories_kc
   };
 }
 
+/** 하루 식사들의 탄단지 합계와, 탄단지 정보가 있는 음식의 칼로리 합. */
+function nutrition(meals: Meal[]): { macros: Macros; macroKcal: number } {
+  const macros: Macros = { carbs_g: 0, protein_g: 0, fat_g: 0 };
+  let macroKcal = 0;
+  for (const item of meals.flatMap((m) => m.items ?? [])) {
+    if (item.carbs_g === undefined || item.protein_g === undefined || item.fat_g === undefined) continue;
+    macros.carbs_g += item.carbs_g;
+    macros.protein_g += item.protein_g;
+    macros.fat_g += item.fat_g;
+    macroKcal += item.calories_kcal;
+  }
+  const r = (n: number) => Math.round(n * 10) / 10;
+  return { macros: { carbs_g: r(macros.carbs_g), protein_g: r(macros.protein_g), fat_g: r(macros.fat_g) }, macroKcal };
+}
+
 /** 항목 없이 저장된 예전 기록은 하나짜리 목록으로 보여 준다. */
 function withItems(m: Meal): Meal {
   return m.items?.length ? m : { ...m, items: [{ name: m.food_name, calories_kcal: m.calories_kcal }] };
 }
 
-export function createHandler(store: Store, analyze: Analyzer, config: Config) {
+export function createHandler(store: Store, ai: FoodAi, config: Config) {
   function photoPath(userKey: UserKey, kind: "meals" | "workouts", type: string) {
     return `${userKey}/${kind}/${crypto.randomUUID()}.${PHOTO_TYPES[type]}`;
   }
@@ -243,7 +266,16 @@ export function createHandler(store: Store, analyze: Analyzer, config: Config) {
 
   async function analyzePhoto(req: Request) {
     const photo = (await readPhoto(await readForm(req), true))!;
-    return json(await analyze(photo.data, photo.type));
+    return json(await ai.analyzePhoto(photo.data, photo.type));
+  }
+
+  async function estimate(req: Request) {
+    const body = await readJson(req);
+    const names = Array.isArray(body.names) ? body.names.map((n) => (typeof n === "string" ? n.trim() : "")) : [];
+    if (names.length === 0 || names.length > MAX_ITEMS || names.some((n) => !n || n.length > 50)) {
+      throw new HttpError(400, `음식 이름을 1~${MAX_ITEMS}개, 각각 1~50자로 보내 주세요.`);
+    }
+    return json({ items: await ai.estimate(names) });
   }
 
   async function day(url: URL) {
@@ -263,11 +295,21 @@ export function createHandler(store: Store, analyze: Analyzer, config: Config) {
       const mine = meals.filter((m) => m.user_key === k);
       const total = mine.reduce((s, m) => s + m.calories_kcal, 0);
       const target = targetOn(targets, k, date);
+      const { macros, macroKcal } = nutrition(mine);
       return [k, {
         name: config.users[k].name,
         total_kcal: total,
         target_kcal: target,
         status: dayStatus(total, target, mine.length),
+        macros,
+        feedback: dayFeedback({
+          mealCount: mine.length,
+          totalKcal: total,
+          targetKcal: target,
+          macros,
+          macroKcal,
+          isPast: date < todayIn(config.timeZone),
+        }),
         meals: mine.map((meal) => {
           const { photo_path, ...m } = withItems(meal);
           return { ...m, photo_url: photo_path ? urls[photo_path] ?? null : null };
@@ -422,6 +464,7 @@ export function createHandler(store: Store, analyze: Analyzer, config: Config) {
     if (m === "GET" && path === "/me") return me(userKey);
     if (m === "PUT" && path === "/profile") return updateProfile(req, userKey);
     if (m === "POST" && path === "/analyze") return analyzePhoto(req);
+    if (m === "POST" && path === "/estimate") return estimate(req);
     if (m === "GET" && path === "/day") return day(url);
     if (m === "GET" && path === "/calendar") return calendar(url);
     if (m === "POST" && path === "/meals") return createMeal(req, userKey);

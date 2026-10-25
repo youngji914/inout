@@ -139,3 +139,99 @@ export async function verifyToken(
   const expected = base64url(await hmac(secret, `${userKey}.${exp}`));
   return (await safeEqual(sig, expected)) ? userKey as UserKey : null;
 }
+
+// ---- 하루 영양 피드백 ----
+
+export interface Macros {
+  carbs_g: number;
+  protein_g: number;
+  fat_g: number;
+}
+
+export interface Feedback {
+  level: "good" | "warn" | "info";
+  text: string;
+}
+
+// 한국인 영양소 섭취기준의 에너지 적정비율: 탄수화물 55~65%, 지방 15~30%.
+// 단백질은 기준 하한(7%)이 다이어트에는 너무 낮아 15%를 하한으로 쓴다.
+export const CARB_MAX_PCT = 65;
+export const CARB_MIN_PCT = 45;
+export const PROTEIN_MIN_PCT = 15;
+export const FAT_MAX_PCT = 30;
+
+/** 탄단지가 칼로리에서 차지하는 비율(%). 영양 정보가 없으면 null. */
+export function macroPercents(m: Macros): Macros | null {
+  const kcal = m.carbs_g * 4 + m.protein_g * 4 + m.fat_g * 9;
+  if (kcal <= 0) return null;
+  return {
+    carbs_g: Math.round((m.carbs_g * 4 / kcal) * 100),
+    protein_g: Math.round((m.protein_g * 4 / kcal) * 100),
+    fat_g: Math.round((m.fat_g * 9 / kcal) * 100),
+  };
+}
+
+export function dayFeedback(input: {
+  mealCount: number;
+  totalKcal: number;
+  targetKcal: number | null;
+  macros: Macros;
+  /** 탄단지 정보가 있는 음식의 칼로리 합 */
+  macroKcal: number;
+  /** 이미 지난 날짜인지 (적게 먹은 날 안내용) */
+  isPast: boolean;
+}): Feedback[] {
+  const { mealCount, totalKcal, targetKcal, macros, macroKcal, isPast } = input;
+  if (mealCount === 0) return [];
+  const out: Feedback[] = [];
+
+  if (targetKcal) {
+    const ratio = totalKcal / targetKcal;
+    if (ratio > 1.1) {
+      out.push({
+        level: "warn",
+        text: `목표보다 ${
+          (totalKcal - targetKcal).toLocaleString("ko-KR")
+        } kcal 더 먹었어요. 다음 끼니는 가볍게 드세요.`,
+      });
+    } else if (isPast && ratio < 0.7) {
+      out.push({ level: "info", text: "목표보다 많이 적게 먹었어요. 너무 적게 먹으면 요요가 오기 쉬워요." });
+    }
+  }
+
+  const pct = macroPercents(macros);
+  if (pct) {
+    if (pct.carbs_g > CARB_MAX_PCT) {
+      out.push({
+        level: "warn",
+        text: `탄수화물 비중이 높아요 (${pct.carbs_g}%). 밥·면·빵을 조금 줄이고 단백질 반찬을 늘려 보세요.`,
+      });
+    } else if (pct.carbs_g < CARB_MIN_PCT) {
+      out.push({ level: "info", text: `탄수화물이 적은 편이에요 (${pct.carbs_g}%). 너무 줄이면 쉽게 지칠 수 있어요.` });
+    }
+    if (pct.protein_g < PROTEIN_MIN_PCT) {
+      out.push({
+        level: "warn",
+        text: `단백질이 부족해요 (${pct.protein_g}%). 달걀·두부·닭가슴살·생선을 곁들여 보세요.`,
+      });
+    }
+    if (pct.fat_g > FAT_MAX_PCT) {
+      out.push({
+        level: "warn",
+        text: `지방 비중이 높아요 (${pct.fat_g}%). 튀김·볶음보다 굽거나 찐 요리를 골라 보세요.`,
+      });
+    }
+    if (!out.some((f) => f.level === "warn")) {
+      out.push({ level: "good", text: "탄수화물·단백질·지방 균형이 좋아요. 이대로 유지해요." });
+    }
+    if (totalKcal > 0 && macroKcal / totalKcal < 0.5) {
+      out.push({ level: "info", text: "영양 정보가 없는 음식이 많아 비율이 정확하지 않을 수 있어요." });
+    }
+  } else {
+    out.push({
+      level: "info",
+      text: "영양 정보가 있는 음식이 없어요. 사진으로 기록하거나 칼로리를 AI로 채우면 탄단지를 알려 드려요.",
+    });
+  }
+  return out;
+}

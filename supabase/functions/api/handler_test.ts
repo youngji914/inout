@@ -1,7 +1,18 @@
 import { assert, assertEquals } from "@std/assert";
-import type { Analysis } from "./analyze.ts";
+import type { Analysis, FoodAi } from "./analyze.ts";
 import { type Config, createHandler } from "./handler.ts";
-import { calcBmr, calcEer, dayStatus, monthRange, signToken, targetOn, todayIn, verifyToken } from "./logic.ts";
+import {
+  calcBmr,
+  calcEer,
+  dayFeedback,
+  dayStatus,
+  macroPercents,
+  monthRange,
+  signToken,
+  targetOn,
+  todayIn,
+  verifyToken,
+} from "./logic.ts";
 import type { TargetRow, UserKey } from "./logic.ts";
 import { memoryStore } from "./memory_store.ts";
 
@@ -63,15 +74,24 @@ const ANALYSIS: Analysis = {
   is_food: true,
   food_name: "김치찌개, 공기밥",
   calories_kcal: 750,
-  items: [{ name: "김치찌개", calories_kcal: 450 }, { name: "공기밥", calories_kcal: 300 }],
+  items: [
+    { name: "김치찌개", calories_kcal: 450, carbs_g: 15, protein_g: 25, fat_g: 30 },
+    { name: "공기밥", calories_kcal: 300, carbs_g: 66, protein_g: 6, fat_g: 0.6 },
+  ],
   description: "1인분 뚝배기와 밥 한 공기로 보입니다.",
+};
+
+const fakeAi: FoodAi = {
+  analyzePhoto: () => Promise.resolve(ANALYSIS),
+  estimate: (names) =>
+    Promise.resolve(names.map((name) => ({ name, calories_kcal: 500, carbs_g: 100, protein_g: 10, fat_g: 5 }))),
 };
 
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0]);
 
 function setup() {
   const mem = memoryStore();
-  const handler = createHandler(mem.store, () => Promise.resolve(ANALYSIS), config);
+  const handler = createHandler(mem.store, fakeAi, config);
   const call = (method: string, path: string, opts: { token?: string; body?: unknown; form?: FormData } = {}) => {
     const headers: Record<string, string> = {};
     if (opts.token) headers["x-app-token"] = opts.token;
@@ -241,4 +261,73 @@ Deno.test("unknown path is 404", async () => {
   const t = setup();
   const token = await t.login("user1", "1111");
   assertEquals((await t.call("GET", "/nope", { token })).status, 404);
+});
+
+// ---------- 칼로리 추정·영양 피드백 ----------
+
+Deno.test("macro percents and feedback rules", () => {
+  assertEquals(macroPercents({ carbs_g: 0, protein_g: 0, fat_g: 0 }), null);
+  assertEquals(macroPercents({ carbs_g: 100, protein_g: 25, fat_g: 11.1 }), { carbs_g: 67, protein_g: 17, fat_g: 17 });
+  const base = { mealCount: 2, totalKcal: 1500, targetKcal: 2000, macroKcal: 1500, isPast: false };
+
+  const carbHeavy = dayFeedback({ ...base, macros: { carbs_g: 300, protein_g: 30, fat_g: 20 } });
+  assert(carbHeavy.some((f) => f.level === "warn" && f.text.startsWith("탄수화물 비중이 높아요")));
+  assert(carbHeavy.some((f) => f.text.startsWith("단백질이 부족해요")));
+  assert(!carbHeavy.some((f) => f.level === "good"));
+
+  const balanced = dayFeedback({ ...base, macros: { carbs_g: 200, protein_g: 90, fat_g: 40 } });
+  assertEquals(balanced.map((f) => f.level), ["good"]);
+
+  const over = dayFeedback({ ...base, totalKcal: 2500, macros: { carbs_g: 200, protein_g: 90, fat_g: 40 } });
+  assert(over[0].text.startsWith("목표보다 500 kcal 더 먹었어요"));
+
+  const pastUnder = dayFeedback({
+    ...base,
+    totalKcal: 1000,
+    macroKcal: 1000,
+    isPast: true,
+    macros: { carbs_g: 120, protein_g: 60, fat_g: 30 },
+  });
+  assert(pastUnder.some((f) => f.text.startsWith("목표보다 많이 적게")));
+
+  assertEquals(dayFeedback({ ...base, mealCount: 0, macros: { carbs_g: 0, protein_g: 0, fat_g: 0 } }), []);
+  const noMacros = dayFeedback({ ...base, macroKcal: 0, macros: { carbs_g: 0, protein_g: 0, fat_g: 0 } });
+  assertEquals(noMacros[0].level, "info");
+  const partial = dayFeedback({ ...base, macroKcal: 300, macros: { carbs_g: 40, protein_g: 20, fat_g: 8 } });
+  assert(partial.some((f) => f.text.startsWith("영양 정보가 없는 음식이 많아")));
+});
+
+Deno.test("estimate returns typical calories for typed names", async () => {
+  const t = setup();
+  const token = await t.login("user1", "1111");
+  const res = await t.call("POST", "/estimate", { token, body: { names: ["라면", "  김밥 한 줄 "] } });
+  assertEquals(res.status, 200);
+  const { items } = await res.json();
+  assertEquals(items.map((i: { name: string }) => i.name), ["라면", "김밥 한 줄"]);
+  assertEquals(items[0].calories_kcal, 500);
+  assertEquals((await t.call("POST", "/estimate", { token, body: { names: [] } })).status, 400);
+  assertEquals((await t.call("POST", "/estimate", { body: { names: ["라면"] } })).status, 401);
+});
+
+Deno.test("saved macros feed the day nutrition and feedback", async () => {
+  const t = setup();
+  const token = await t.login("user1", "1111");
+  const items = [
+    { name: "라면", calories_kcal: 500, carbs_g: 79, protein_g: 10, fat_g: 16 },
+    { name: "김밥", calories_kcal: 480, carbs_g: 80, protein_g: 12, fat_g: 10 },
+    { name: "물", calories_kcal: 0 },
+  ];
+  const created = await t.call("POST", "/meals", {
+    token,
+    form: mealForm({ ...LUNCH, items: JSON.stringify(items) }, false),
+  });
+  assertEquals(created.status, 201);
+  const meal = (await created.json()).meal;
+  assertEquals(meal.items[0].carbs_g, 79);
+  assertEquals(meal.items[2].carbs_g, undefined);
+
+  const day = await (await t.call("GET", "/day?date=2026-10-25", { token })).json();
+  assertEquals(day.users.user1.macros, { carbs_g: 159, protein_g: 22, fat_g: 26 });
+  assert(day.users.user1.feedback.some((f: { text: string }) => f.text.startsWith("탄수화물 비중이 높아요")));
+  assertEquals(day.users.user2.feedback, []);
 });

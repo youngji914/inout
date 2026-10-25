@@ -471,6 +471,11 @@ function renderDay() {
         ${photos ? `<div class="photos">${photos}</div>` : ""}
         ${mine ? `<button class="btn outline block" style="margin-top:20px" data-add="workout">운동 사진 올리기</button>` : ""}
       </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2 class="h2">${d.date === ymd(new Date()) ? "오늘의 피드백" : "이날의 피드백"}</h2></div>
+      <div class="card">${feedbackHtml(u)}</div>
     </section>`;
 
   $app.querySelectorAll("[data-shift]").forEach((b) => b.addEventListener("click", () => {
@@ -513,6 +518,31 @@ function renderDay() {
       toast(e.message);
     }
   }));
+}
+
+const MACRO_LABELS = [
+  ["carbs_g", "탄수화물", "m-carb"],
+  ["protein_g", "단백질", "m-protein"],
+  ["fat_g", "지방", "m-fat"],
+];
+
+function feedbackHtml(u) {
+  if (!u.meals.length) return `<p class="muted small" style="margin:0">식사를 기록하면 탄수화물·단백질·지방 비율과 피드백을 보여 드려요.</p>`;
+  const m = u.macros;
+  const kcal = { carbs_g: m.carbs_g * 4, protein_g: m.protein_g * 4, fat_g: m.fat_g * 9 };
+  const sum = kcal.carbs_g + kcal.protein_g + kcal.fat_g;
+  const pct = (k) => (sum ? Math.round((kcal[k] / sum) * 100) : 0);
+  const macros = sum
+    ? `<p class="eyebrow">탄단지 비율</p>
+       <div class="macro-bar">${MACRO_LABELS.map(([k, , cls]) => `<span class="${cls}" style="width:${(kcal[k] / sum) * 100}%"></span>`).join("")}</div>
+       <div class="macro-legend">${
+      MACRO_LABELS.map(([k, label, cls]) =>
+        `<div><span class="swatch ${cls}"></span><span class="small">${label}</span><b class="num">${pct(k)}%</b><span class="small muted">${Math.round(m[k])}g</span></div>`
+      ).join("")
+    }</div>`
+    : "";
+  const list = u.feedback.map((f) => `<li class="fb-${f.level}">${esc(f.text)}</li>`).join("");
+  return `${macros}<ul class="feedback ${sum ? "" : "flush"}">${list}</ul>`;
 }
 
 function zoom(src) {
@@ -578,6 +608,39 @@ async function addMealFromPhoto() {
   openMealEditor({ draft: { date: ymd(at), time: hm(at), meal_type: guessMealType(at), photo, analyzing: true } });
 }
 
+const MACRO_KEYS = ["carbs_g", "protein_g", "fat_g"];
+
+function macrosOf(it) {
+  return MACRO_KEYS.every((k) => typeof it[k] === "number") ? { carbs_g: it.carbs_g, protein_g: it.protein_g, fat_g: it.fat_g } : null;
+}
+
+/** 편집용 항목. aiName/aiKcal은 AI가 마지막으로 추정한 이름·칼로리(사용자가 고쳤는지 판단용). */
+function editItem(src, fromAi) {
+  const macros = macrosOf(src);
+  return {
+    name: src.name,
+    kcal: String(src.calories_kcal),
+    macros,
+    aiName: macros ? src.name : null,
+    aiKcal: macros ? src.calories_kcal : null,
+    fromAi,
+  };
+}
+
+function blankItem() {
+  return { name: "", kcal: "", macros: null, aiName: null, aiKcal: null, fromAi: false };
+}
+
+/** 저장할 항목. 칼로리를 고쳤으면 탄단지도 같은 비율로 맞추고, 이름이 바뀌었으면 버린다. */
+function itemPayload(it) {
+  const out = { name: it.name.trim(), calories_kcal: Math.round(Number(it.kcal)) };
+  if (it.macros && it.aiName === it.name && it.aiKcal !== null) {
+    const scale = it.aiKcal > 0 ? out.calories_kcal / it.aiKcal : 1;
+    for (const k of MACRO_KEYS) out[k] = Math.round(it.macros[k] * scale * 10) / 10;
+  }
+  return out;
+}
+
 function openMealEditor({ meal, draft }) {
   const editing = !!meal;
   const d = editing
@@ -585,14 +648,13 @@ function openMealEditor({ meal, draft }) {
       date: meal.date,
       time: hm(new Date(meal.recorded_at)),
       meal_type: meal.meal_type,
-      items: meal.items.map((i) => ({ name: i.name, kcal: String(i.calories_kcal) })),
+      items: meal.items.map((i) => editItem(i, false)),
       photo_url: meal.photo_url,
       ai_estimated: meal.ai_estimated,
     }
-    : { items: [{ name: "", kcal: "" }], ...draft };
+    : { items: [blankItem()], ...draft };
   let items = d.items;
   let mealType = d.meal_type;
-  let aiTotal = null;
   const previewUrl = d.photo ? URL.createObjectURL(d.photo) : d.photo_url;
 
   $modal.innerHTML = `
@@ -626,9 +688,13 @@ function openMealEditor({ meal, draft }) {
         <div class="field" style="margin-bottom:0">
           <span class="label">음식</span>
           <div class="items" id="items"></div>
-          <button type="button" class="btn text" id="add-item" style="padding-left:0">+ 음식 추가</button>
+          <p class="small muted" style="margin:8px 0 0">칼로리를 모르면 이름만 쓰세요. "라면 반 개"처럼 양을 적으면 더 정확해요.</p>
+          <div class="item-actions">
+            <button type="button" class="btn text" id="add-item">+ 음식 추가</button>
+            <button type="button" class="btn text" id="fill-kcal" hidden>빈 칼로리 AI로 채우기</button>
+          </div>
           <div class="total"><span class="eyebrow" style="margin:0">합계</span><span><span class="num" id="total">0</span> kcal</span></div>
-          <p class="note" id="estimate-note" ${d.ai_estimated ? "" : "hidden"}>AI가 사진으로 추정한 값이에요. 실제와 다를 수 있으니 확인 후 수정하세요.</p>
+          <p class="note" id="estimate-note" ${d.ai_estimated ? "" : "hidden"}>AI가 추정한 값이 들어 있어요. 실제와 다를 수 있으니 확인 후 수정하세요.</p>
         </div>
         <p class="error small" id="meal-error" style="margin:12px 0 0"></p>
         <div class="modal-actions">
@@ -645,6 +711,8 @@ function openMealEditor({ meal, draft }) {
   const $items = $modal.querySelector("#items");
   const $total = $modal.querySelector("#total");
   const $whenText = $modal.querySelector("#when-text");
+  const $fill = $modal.querySelector("#fill-kcal");
+  const pending = new Set(); // 추정 중인 항목
 
   const updateWhen = () => {
     const date = form.date.value || d.date;
@@ -652,16 +720,59 @@ function openMealEditor({ meal, draft }) {
     $whenText.textContent = `${relDay(date)} ${fmtTime(time)}`;
   };
   const totalKcal = () => items.reduce((sum, i) => sum + (Number(i.kcal) || 0), 0);
-  const updateTotal = () => ($total.textContent = fmtKcal(totalKcal()));
-  const renderItems = () => {
-    $items.innerHTML = items.map((it, i) => `
-      <div class="item-row" data-i="${i}">
-        <input type="text" class="item-name" value="${esc(it.name)}" placeholder="예: 김치찌개" maxlength="50" aria-label="음식 이름">
-        <span class="kcal-wrap"><input type="number" class="item-kcal" value="${esc(it.kcal)}" min="0" max="10000" step="1" inputmode="numeric" placeholder="0" aria-label="칼로리"></span>
-        <button type="button" class="remove" aria-label="삭제" ${items.length === 1 ? "disabled" : ""}>${ICON.close}</button>
-      </div>`).join("");
-    updateTotal();
+  const usesAi = () => items.some((i) => i.aiKcal !== null && i.fromAi && Number(i.kcal) === i.aiKcal);
+  const refreshMeta = () => {
+    $total.textContent = fmtKcal(totalKcal());
+    $modal.querySelector("#estimate-note").hidden = !(usesAi() || (editing && d.ai_estimated));
+    $fill.hidden = !items.some((i) => i.name.trim() && i.kcal === "" && !pending.has(i));
   };
+  const rowHtml = (it, i) => `
+    <div class="item-row" data-i="${i}">
+      <input type="text" class="item-name" value="${esc(it.name)}" placeholder="예: 김치찌개" maxlength="50" enterkeyhint="next" aria-label="음식 이름">
+      <span class="kcal-wrap ${pending.has(it) ? "busy" : ""}"><input type="number" class="item-kcal" value="${esc(it.kcal)}" min="0" max="10000" step="1" inputmode="numeric" placeholder="${pending.has(it) ? "추정 중" : "0"}" aria-label="칼로리"></span>
+      <button type="button" class="remove" aria-label="삭제" ${items.length === 1 ? "disabled" : ""}>${ICON.close}</button>
+    </div>`;
+  const renderItems = () => {
+    $items.innerHTML = items.map(rowHtml).join("");
+    refreshMeta();
+  };
+  // 행을 다시 그리지 않고 칼로리 칸만 고친다 (입력 중인 칸의 포커스·키보드를 유지)
+  const renderRow = (it) => {
+    const row = $items.querySelector(`[data-i="${items.indexOf(it)}"]`);
+    if (!row) return;
+    const kcal = row.querySelector(".item-kcal");
+    if (kcal.value !== it.kcal) kcal.value = it.kcal;
+    kcal.placeholder = pending.has(it) ? "추정 중" : "0";
+    row.querySelector(".kcal-wrap").classList.toggle("busy", pending.has(it));
+    refreshMeta();
+  };
+
+  /** 이름만 있고 칼로리를 사용자가 정하지 않은 항목들의 칼로리·탄단지를 AI로 채운다. */
+  async function estimateItems(targets) {
+    targets = targets.filter((it) => it.name.trim() && !pending.has(it));
+    if (!targets.length) return;
+    targets.forEach((it) => pending.add(it));
+    targets.forEach(renderRow);
+    try {
+      const { items: est } = await api("/estimate", { method: "POST", json: { names: targets.map((it) => it.name.trim()) } });
+      targets.forEach((it, n) => {
+        const e = est[n];
+        if (!items.includes(it) || it.name.trim() !== e.name) return; // 그사이 지웠거나 이름을 바꿈
+        const userSetKcal = it.kcal !== "" && Number(it.kcal) !== it.aiKcal;
+        it.macros = macrosOf(e);
+        it.aiName = it.name;
+        it.aiKcal = e.calories_kcal;
+        it.fromAi = true;
+        if (!userSetKcal) it.kcal = String(e.calories_kcal);
+      });
+    } catch (e) {
+      $modal.querySelector("#meal-error").textContent = `칼로리를 추정하지 못했어요: ${e.message}`;
+    } finally {
+      targets.forEach((it) => pending.delete(it));
+      if ($modal.open) targets.forEach(renderRow);
+    }
+  }
+
   updateWhen();
   renderItems();
 
@@ -672,7 +783,22 @@ function openMealEditor({ meal, draft }) {
     if (e.target.classList.contains("item-name")) it.name = e.target.value;
     else it.kcal = e.target.value;
     e.target.classList.remove("invalid");
-    updateTotal();
+    refreshMeta();
+  });
+  // 이름 입력을 마치면(다음 칸으로 이동·엔터) 칼로리가 비었거나 AI 값 그대로일 때 자동 추정
+  $items.addEventListener("change", (e) => {
+    if (!e.target.classList.contains("item-name")) return;
+    const it = items[Number(e.target.closest(".item-row").dataset.i)];
+    const kcalIsAuto = it.kcal === "" || (it.aiKcal !== null && Number(it.kcal) === it.aiKcal);
+    if (it.name.trim() && it.name !== it.aiName && kcalIsAuto) {
+      if (it.kcal !== "") it.kcal = "";
+      estimateItems([it]);
+    }
+  });
+  $items.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !e.target.classList.contains("item-name")) return;
+    e.preventDefault(); // 엔터로 폼이 저장되지 않게
+    e.target.closest(".item-row").querySelector(".item-kcal").focus();
   });
   $items.addEventListener("click", (e) => {
     const btn = e.target.closest(".remove");
@@ -681,10 +807,11 @@ function openMealEditor({ meal, draft }) {
     renderItems();
   });
   $modal.querySelector("#add-item").addEventListener("click", () => {
-    items.push({ name: "", kcal: "" });
+    items.push(blankItem());
     renderItems();
     $items.querySelector(".item-row:last-child .item-name").focus();
   });
+  $fill.addEventListener("click", () => estimateItems(items.filter((i) => i.name.trim() && i.kcal === "")));
   $modal.querySelector("#when-toggle").addEventListener("click", (e) => {
     const box = $modal.querySelector("#when-edit");
     box.hidden = !box.hidden;
@@ -710,13 +837,11 @@ function openMealEditor({ meal, draft }) {
         return;
       }
       const found = r.items.length ? r.items : [{ name: r.food_name, calories_kcal: r.calories_kcal }];
-      items = found.map((i) => ({ name: i.name, kcal: String(i.calories_kcal) }));
-      aiTotal = totalKcal();
+      items = found.map((i) => editItem(i, true));
       renderItems();
-      $modal.querySelector("#estimate-note").hidden = false;
       box.innerHTML = `<p class="eyebrow">AI 분석</p>${esc(r.description)}`;
     }).catch((e) => {
-      if ($modal.open) box.innerHTML = `<p class="eyebrow">AI 분석</p><span class="error">${esc(e.message)}</span><br>음식과 칼로리를 직접 입력해 주세요.`;
+      if ($modal.open) box.innerHTML = `<p class="eyebrow">AI 분석</p><span class="error">${esc(e.message)}</span><br>음식 이름만 적으면 칼로리는 AI가 채워 드려요.`;
     });
   }
 
@@ -724,11 +849,15 @@ function openMealEditor({ meal, draft }) {
     e.preventDefault();
     const err = $modal.querySelector("#meal-error");
     err.textContent = "";
+    if (pending.size) {
+      err.textContent = "칼로리를 추정하고 있어요. 잠시만 기다려 주세요.";
+      return;
+    }
     // 이름·칼로리가 모두 빈 줄은 무시한다
-    const filled = items.map((it, i) => ({ ...it, i })).filter((it) => it.name.trim() || it.kcal !== "");
+    const filled = items.map((it, i) => ({ it, i })).filter(({ it }) => it.name.trim() || it.kcal !== "");
     let bad = false;
-    for (const it of filled) {
-      const row = $items.querySelector(`[data-i="${it.i}"]`);
+    for (const { it, i } of filled) {
+      const row = $items.querySelector(`[data-i="${i}"]`);
       if (!it.name.trim()) {
         row.querySelector(".item-name").classList.add("invalid");
         bad = true;
@@ -747,7 +876,7 @@ function openMealEditor({ meal, draft }) {
       err.textContent = "음식 이름과 칼로리(0~10,000)를 확인해 주세요.";
       return;
     }
-    const payloadItems = filled.map((it) => ({ name: it.name.trim(), calories_kcal: Math.round(Number(it.kcal)) }));
+    const payloadItems = filled.map(({ it }) => itemPayload(it));
     const recordedAt = new Date(`${form.date.value}T${form.time.value}`);
     const btn = form.querySelector("button[type=submit]");
     btn.disabled = true;
@@ -763,7 +892,7 @@ function openMealEditor({ meal, draft }) {
         fd.set("recorded_at", recordedAt.toISOString());
         fd.set("meal_type", mealType);
         fd.set("items", JSON.stringify(payloadItems));
-        fd.set("ai_estimated", String(aiTotal !== null && aiTotal === totalKcal()));
+        fd.set("ai_estimated", String(usesAi()));
         if (d.photo) fd.set("photo", d.photo, "meal.jpg");
         await api("/meals", { method: "POST", form: fd });
       }
