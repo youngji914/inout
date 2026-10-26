@@ -32,6 +32,22 @@ const ICON = {
   dish: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 16h18M5 16a7 7 0 0 1 14 0M12 9V7"/></svg>`,
 };
 
+ICON.bell = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"/></svg>`;
+ICON.search = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>`;
+ICON.gear = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>`;
+ICON.plus = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`;
+ICON.home = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1z"/></svg>`;
+ICON.cal = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>`;
+
+/** 유튜브처럼 왼쪽 로고/제목, 오른쪽 아이콘·아바타가 있는 상단 바 */
+function topbar({ title, back = false, right = "" } = {}) {
+  const left = title
+    ? `${back ? `<button class="ib" data-back aria-label="뒤로">${ICON.left}</button>` : ""}<span class="title">${esc(title)}</span>`
+    : `<span class="logo"><span class="play"></span>칼로리노트</span>`;
+  const me = state.me ? `<button class="avatar" data-go="profile" aria-label="내 정보">${esc(userName(state.me).slice(0, 1))}</button>` : "";
+  return `<div class="topbar">${left}<span class="spacer"></span>${right}${me}</div>`;
+}
+
 const state = {
   token: null,
   me: null, // "user1" | "user2"
@@ -253,19 +269,19 @@ async function renderLogin() {
   try {
     users = (await api("/users")).users;
   } catch (e) {
-    $app.innerHTML = `<p class="eyebrow">Calorie Note</p><div class="card error">${esc(e.message)}</div>`;
+    $app.innerHTML = `${topbar()}<div class="card error">${esc(e.message)}</div>`;
     return;
   }
   let selected = storage((s) => s.getItem("calorie-note-last-user")) || users[0].user_key;
   $app.innerHTML = `
+    ${topbar()}
     <div class="login">
-      <p class="eyebrow">Calorie Note</p>
       <h1 class="display">오늘의 식사를<br>가볍게 기록해요</h1>
       <p class="lead">사진 한 장이면 칼로리가 채워지고, 두 사람의 하루가 한 달력에 쌓여요.</p>
       <form class="card" id="login-form">
         <div class="field">
           <span class="label">누구세요?</span>
-          <div class="pills fill">
+          <div class="pills fill round">
             ${users.map((u) => `<button type="button" class="pill" data-user="${u.user_key}">${esc(u.name)}</button>`).join("")}
           </div>
         </div>
@@ -297,6 +313,7 @@ async function renderLogin() {
         s.setItem(TOKEN_KEY, data.token);
         s.setItem("calorie-note-last-user", data.user_key);
       });
+      renderTabs();
       go(needsProfile() ? "profile" : "day");
     } catch (err) {
       $app.querySelector("#login-error").textContent = err.message;
@@ -321,6 +338,7 @@ function logout() {
 
 function go(view) {
   state.view = view;
+  if (!$tabs.querySelector(".inner")) renderTabs();
   $tabs.hidden = false;
   $tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.view === view));
   window.scrollTo(0, 0);
@@ -349,10 +367,61 @@ async function refresh({ silent = false } = {}) {
   }
 }
 
+function bindTopbar() {
+  $app.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", (e) => {
+    e.preventDefault();
+    go(b.dataset.go);
+  }));
+}
+
+function renderTabs() {
+  const initial = state.me ? esc(userName(state.me).slice(0, 1)) : "";
+  $tabs.innerHTML = `
+    <div class="inner">
+      <button data-view="day">${ICON.home}하루</button>
+      <button data-view="calendar">${ICON.cal}달력</button>
+      <button class="add" data-add-menu aria-label="기록 추가">${ICON.plus}</button>
+      <button data-view="profile" class="avatar-tab"><span>${initial}</span>내 정보</button>
+    </div>`;
+}
+
 $tabs.addEventListener("click", (e) => {
   const btn = e.target.closest("button");
-  if (btn) go(btn.dataset.view);
+  if (!btn) return;
+  if (btn.dataset.addMenu !== undefined) return openAddMenu();
+  go(btn.dataset.view);
 });
+
+/** 하단 + 버튼: 유튜브 만들기 시트처럼 기록 종류를 고른다. */
+function openAddMenu() {
+  $modal.innerHTML = `
+    <div class="inner">
+      <div class="modal-head"><h2 class="h2" tabindex="-1">기록 추가</h2>
+        <button type="button" class="icon-btn" data-close aria-label="닫기">${ICON.close}</button></div>
+      <div class="btn-stack">
+        <button class="btn primary block" data-pick="photo">${ICON.camera}사진으로 식사 기록</button>
+        <button class="btn block" data-pick="manual">직접 식사 입력</button>
+        <button class="btn block" data-pick="workout">운동 사진 올리기</button>
+      </div>
+    </div>`;
+  $modal.showModal();
+  $modal.querySelector(".h2").focus();
+  $modal.querySelector("[data-close]").addEventListener("click", () => $modal.close());
+  $modal.querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => {
+    $modal.close();
+    const kind = b.dataset.pick;
+    if (state.view !== "day" || state.viewUser !== state.me) {
+      state.viewUser = state.me;
+      if (kind !== "workout") state.date = ymd(new Date());
+    }
+    if (kind === "photo") addMealFromPhoto();
+    else if (kind === "workout") addWorkoutPhotos();
+    else {
+      const now = new Date();
+      openMealEditor({ draft: { date: ymd(now), time: hm(now), meal_type: guessMealType(now) } });
+    }
+  }));
+}
 
 // 두 사람의 기록을 준실시간으로 맞춘다: 30초마다, 그리고 앱으로 돌아올 때 새로고침.
 setInterval(() => {
@@ -428,35 +497,37 @@ function renderDay() {
     </div>`).join("");
 
   $app.innerHTML = `
-    <div class="day-head">
+    ${topbar()}
+    <div class="pills scroll user-switch" style="margin-top:0">
+      ${state.users.map((x) => `<button class="pill ${x.user_key === key ? "on" : ""}" data-user="${x.user_key}">${esc(x.name)}</button>`).join("")}
+    </div>
+
+    <div class="day-head" style="margin-top:14px">
       <button class="icon-btn" data-shift="-1" aria-label="전날">${ICON.left}</button>
       <div class="titles">
-        <p class="eyebrow">${d.date === ymd(new Date()) ? "오늘" : WEEKDAYS_LONG[date.getDay()]}</p>
         <label class="date-pick">
-          <span class="h1">${date.getMonth() + 1}월 ${date.getDate()}일</span>
+          <span class="h1">${date.getMonth() + 1}월 ${date.getDate()}일 <span class="muted" style="font-weight:500;font-size:15px">${
+    d.date === ymd(new Date()) ? "오늘" : WEEKDAYS_LONG[date.getDay()]
+  }</span></span>
           <input type="date" value="${d.date}" aria-label="날짜 선택">
         </label>
       </div>
       <button class="icon-btn" data-shift="1" aria-label="다음날">${ICON.right}</button>
     </div>
 
-    <div class="pills fill user-switch">
-      ${state.users.map((x) => `<button class="pill ${x.user_key === key ? "on" : ""}" data-user="${x.user_key}">${esc(x.name)}</button>`).join("")}
-    </div>
-
-    <div class="card summary" style="margin-top:16px">${summary}</div>
+    <div class="card summary" style="margin-top:12px">${summary}</div>
 
     <section class="section">
       <div class="section-head"><h2 class="h2">식사</h2></div>
-      <div class="card">${groups}</div>
       ${
     mine
-      ? `<div class="btn-stack" style="margin-top:16px">
-             <button class="btn primary block" data-add="photo">${ICON.camera}사진으로 기록</button>
-             <button class="btn outline block" data-add="manual">직접 입력</button>
+      ? `<div class="btn-row" style="margin-bottom:14px">
+             <button class="btn primary" data-add="photo">${ICON.camera}사진으로 기록</button>
+             <button class="btn outline" data-add="manual">직접 입력</button>
            </div>`
       : ""
   }
+      <div class="card">${groups}</div>
     </section>
 
     <section class="section">
@@ -469,11 +540,11 @@ function renderDay() {
       : `<span class="small">${u.worked_out ? "운동했어요" : "기록 없음"}</span>`
   }
         </div>
-        <p class="small" style="margin:8px 0 0;color:var(--stone)">${
+        <p class="small muted" style="margin:6px 0 0">${
     u.worked_out ? "운동한 날로 기록됐어요." : mine ? "운동했다면 켜거나 사진을 올려 주세요." : ""
   }</p>
         ${photos ? `<div class="photos">${photos}</div>` : ""}
-        ${mine ? `<button class="btn outline block" style="margin-top:20px" data-add="workout">운동 사진 올리기</button>` : ""}
+        ${mine ? `<button class="btn outline block" style="margin-top:16px" data-add="workout">운동 사진 올리기</button>` : ""}
       </div>
     </section>
 
@@ -496,10 +567,7 @@ function renderDay() {
     state.viewUser = b.dataset.user;
     renderDay();
   }));
-  $app.querySelector("[data-go]")?.addEventListener("click", (e) => {
-    e.preventDefault();
-    go("profile");
-  });
+  bindTopbar();
   $app.querySelectorAll("[data-meal]").forEach((b) => b.addEventListener("click", () => {
     const meal = u.meals.find((m) => m.id === b.dataset.meal);
     if (mine) openMealEditor({ meal });
@@ -988,12 +1056,10 @@ function renderCalendar() {
   }
 
   $app.innerHTML = `
+    ${topbar({ title: "달력" })}
     <div class="cal-head">
       <button class="icon-btn" data-month="-1" aria-label="이전 달">${ICON.left}</button>
-      <div class="center">
-        <p class="eyebrow">${y}</p>
-        <h1 class="h1">${m}월</h1>
-      </div>
+      <h1 class="h1">${y}년 ${m}월</h1>
       <button class="icon-btn" data-month="1" aria-label="다음 달">${ICON.right}</button>
     </div>
     <div class="cal">
@@ -1008,6 +1074,7 @@ function renderCalendar() {
     </div>
     <p class="small muted" style="margin-top:12px">날짜를 누르면 그날의 식사·운동 기록을 볼 수 있어요.</p>`;
 
+  bindTopbar();
   $app.querySelectorAll("[data-month]").forEach((b) => b.addEventListener("click", () => {
     const d = new Date(y, m - 1 + Number(b.dataset.month), 1);
     state.month = ymd(d).slice(0, 7);
@@ -1044,15 +1111,20 @@ function renderProfile() {
   let offset = p.activity_level ? p.goal_offset_kcal : 0;
 
   $app.innerHTML = `
-    <p class="eyebrow">내 정보</p>
-    <h1 class="h1">${esc(userName(state.me))}님의 목표</h1>
-    <p class="lead">하루 목표는 권장섭취량을 기준으로 정해요.</p>
+    ${topbar({ title: "내 정보" })}
+    <div class="profile-head">
+      <div class="big-avatar">${esc(userName(state.me).slice(0, 1))}</div>
+      <div>
+        <h1 class="h1">${esc(userName(state.me))}</h1>
+        <p class="lead" style="margin-top:2px">하루 목표는 권장섭취량을 기준으로 정해요.</p>
+      </div>
+    </div>
 
-    <form id="profile-form" class="section" style="margin-top:32px">
+    <form id="profile-form" class="section" style="margin-top:20px">
       <div class="card">
         <div class="field">
           <span class="label">성별</span>
-          <div class="pills fill" id="sex">
+          <div class="pills fill round" id="sex">
             <button type="button" class="pill ${sex === "female" ? "on" : ""}" data-sex="female">여성</button>
             <button type="button" class="pill ${sex === "male" ? "on" : ""}" data-sex="male">남성</button>
           </div>
@@ -1079,7 +1151,7 @@ function renderProfile() {
         <p class="small muted center" style="margin:12px 0 24px">kcal / 일</p>
         <div class="field">
           <span class="label">목표 조정 (kcal)</span>
-          <div class="pills fill" id="presets">${GOAL_PRESETS.map(([v, l]) => `<button type="button" class="pill" data-offset="${v}">${l}</button>`).join("")}</div>
+          <div class="pills fill round" id="presets">${GOAL_PRESETS.map(([v, l]) => `<button type="button" class="pill" data-offset="${v}">${l}</button>`).join("")}</div>
         </div>
         <label class="field" style="margin-bottom:0"><span class="label">권장섭취량에서 더하거나 뺄 칼로리 (kcal)</span>
           <input type="number" name="goal_offset_kcal" value="${esc(offset)}" min="-2000" max="2000" step="10" inputmode="numeric">
@@ -1094,6 +1166,7 @@ function renderProfile() {
       </div>
     </form>`;
 
+  bindTopbar();
   const form = $app.querySelector("#profile-form");
   const values = () => ({
     age: Number(form.age.value),
@@ -1158,7 +1231,7 @@ function renderProfile() {
 
 async function start() {
   if (!API) {
-    $app.innerHTML = `<p class="eyebrow">Calorie Note</p><div class="card">
+    $app.innerHTML = `${topbar()}<div class="card">
       <p style="margin-top:0">서버 주소가 설정되지 않았어요.</p>
       <p class="muted small" style="margin-bottom:0">GitHub 저장소 Settings → Secrets and variables → Actions → Variables에
       <code>SUPABASE_PROJECT_REF</code>를 추가한 뒤 Pages 배포를 다시 실행하세요. (README 참고)</p></div>`;
@@ -1172,6 +1245,7 @@ async function start() {
     state.users = me.users;
     state.viewUser = me.user_key;
     state.date = me.today || state.date;
+    renderTabs();
     go(needsProfile() ? "profile" : "day");
   } catch (e) {
     if (state.token) $app.innerHTML = `<div class="card error">${esc(e.message)}</div>`;
