@@ -43,7 +43,7 @@ ICON.cal = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-wi
 function topbar({ title, back = false, right = "" } = {}) {
   const left = title
     ? `${back ? `<button class="ib" data-back aria-label="뒤로">${ICON.left}</button>` : ""}<span class="title">${esc(title)}</span>`
-    : `<span class="logo"><span class="play"></span>칼로리노트</span>`;
+    : `<span class="logo"><img class="play" src="img/logo.png" alt="">칼로리노트</span>`;
   const me = state.me ? `<button class="avatar" data-go="profile" aria-label="내 정보">${esc(userName(state.me).slice(0, 1))}</button>` : "";
   return `<div class="topbar">${left}<span class="spacer"></span>${right}${me}</div>`;
 }
@@ -569,9 +569,7 @@ function renderDay() {
   }));
   bindTopbar();
   $app.querySelectorAll("[data-meal]").forEach((b) => b.addEventListener("click", () => {
-    const meal = u.meals.find((m) => m.id === b.dataset.meal);
-    if (mine) openMealEditor({ meal });
-    else if (meal.photo_url) zoom(meal.photo_url);
+    openMealDetail(u.meals.find((m) => m.id === b.dataset.meal), mine, u.name);
   }));
   $app.querySelectorAll("[data-zoom]").forEach((img) => img.addEventListener("click", () => zoom(img.src)));
   $app.querySelectorAll("[data-skip], [data-unskip]").forEach((b) => b.addEventListener("click", async () => {
@@ -626,6 +624,67 @@ function feedbackHtml(u) {
     : "";
   const list = u.feedback.map((f) => `<li class="fb-${f.level}">${esc(f.text)}</li>`).join("");
   return `${macros}<ul class="feedback ${sum ? "" : "flush"}">${list}</ul>`;
+}
+
+const MEAL_LABEL = Object.fromEntries(MEAL_TYPES);
+
+/** 식사 상세: 음식별 칼로리·탄단지, 시간, 끼니. 본인 기록이면 수정으로 이어진다. */
+function openMealDetail(meal, mine, ownerName) {
+  const items = meal.items.length ? meal.items : [{ name: meal.food_name, calories_kcal: meal.calories_kcal }];
+  const sum = { carbs_g: 0, protein_g: 0, fat_g: 0 };
+  let withMacros = 0;
+  for (const it of items) {
+    if (macrosOf(it)) {
+      withMacros++;
+      for (const k of MACRO_KEYS) sum[k] += it[k];
+    }
+  }
+  const fmtG = (n) => `${Math.round(n * 10) / 10}g`;
+  const at = new Date(meal.recorded_at);
+  $modal.innerHTML = `
+    <div class="inner">
+      <div class="modal-head">
+        <h2 class="h2" tabindex="-1">${MEAL_LABEL[meal.meal_type]} · ${relDay(meal.date)} ${fmtTime(hm(at))}</h2>
+        <button type="button" class="icon-btn" data-close aria-label="닫기">${ICON.close}</button>
+      </div>
+      <div class="detail-top">
+        ${meal.photo_url ? `<img class="thumb" src="${esc(meal.photo_url)}" alt="" data-zoom>` : ""}
+        <div class="who">
+          <p class="eyebrow">${esc(ownerName)}${meal.ai_estimated ? `<span class="tag">AI 추정</span>` : ""}</p>
+          <div class="num big">${fmtKcal(meal.calories_kcal)}<span class="muted" style="font-size:15px;font-weight:500"> kcal</span></div>
+        </div>
+      </div>
+      <ul class="detail-items">${
+    items.map((it) => `
+        <li>
+          <span class="nm">${esc(it.name)}${
+      macrosOf(it) ? `<span class="macro">탄 ${fmtG(it.carbs_g)} · 단 ${fmtG(it.protein_g)} · 지 ${fmtG(it.fat_g)}</span>` : ""
+    }</span>
+          <span class="kc">${fmtKcal(it.calories_kcal)} kcal</span>
+        </li>`).join("")
+  }</ul>
+      ${
+    withMacros
+      ? `<div class="detail-sum">
+          <div><b class="num">${fmtG(sum.carbs_g)}</b><span>탄수화물</span></div>
+          <div><b class="num">${fmtG(sum.protein_g)}</b><span>단백질</span></div>
+          <div><b class="num">${fmtG(sum.fat_g)}</b><span>지방</span></div>
+        </div>${withMacros < items.length ? `<p class="small muted" style="margin:8px 0 0">탄단지는 AI가 추정한 음식만 더한 값이에요.</p>` : ""}`
+      : `<p class="small muted" style="margin:12px 0 0">탄단지 정보가 없는 기록이에요.</p>`
+  }
+      <div class="modal-actions" style="${mine ? "" : "grid-template-columns:1fr"}">
+        <button type="button" class="btn outline" data-close>닫기</button>
+        ${mine ? `<button type="button" class="btn primary" data-edit>수정</button>` : ""}
+      </div>
+    </div>`;
+  $modal.showModal();
+  $modal.querySelector(".h2").focus();
+  $modal.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => $modal.close()));
+  $modal.querySelector("[data-zoom]")?.addEventListener("click", (e) => zoom(e.target.src));
+  $modal.querySelector("[data-edit]")?.addEventListener("click", () => {
+    $modal.close();
+    openMealEditor({ meal });
+  });
 }
 
 function zoom(src) {
