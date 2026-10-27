@@ -234,29 +234,55 @@ function parseTiffDate(v, start) {
   return Number.isNaN(d.getTime()) || d.getFullYear() < 2000 ? null : d;
 }
 
-/** 긴 변 1600px JPEG로 줄인다. 브라우저가 못 여는 형식이면 원본을 그대로 쓴다. */
+/** 긴 변 1600px JPEG로 줄인다. createImageBitmap이 안 되면(구형 사파리 등) <img>로 연다. */
 async function prepareImage(file) {
+  const toJpeg = async (source, w, h) => {
+    const scale = Math.min(1, 1600 / Math.max(w, h));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(w * scale);
+    canvas.height = Math.round(h * scale);
+    canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+    return new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+  };
   try {
     const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(bmp.width * scale);
-    canvas.height = Math.round(bmp.height * scale);
-    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+    const blob = await toJpeg(bmp, bmp.width, bmp.height);
     if (blob) return blob;
-  } catch { /* fall through */ }
+  } catch { /* 아래 방법으로 */ }
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode(); // 사파리는 <img>에서 사진 회전 정보를 자동으로 반영한다
+    const blob = await toJpeg(img, img.naturalWidth, img.naturalHeight);
+    if (blob) return blob;
+  } catch { /* 아래 방법으로 */ } finally {
+    URL.revokeObjectURL(url);
+  }
   if (["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type) && file.size <= 5 * 1024 * 1024) return file;
-  throw new Error("이 사진 형식은 열 수 없습니다. JPEG/PNG 사진으로 다시 시도해 주세요.");
+  throw new Error("이 사진을 열 수 없어요. 다른 사진으로 다시 시도해 주세요.");
 }
 
+/**
+ * 사진 선택/촬영. 입력칸을 문서에 붙여 둔다: 붙이지 않으면 iOS 사파리(특히 홈 화면 앱)가
+ * 카메라를 쓰는 동안 입력칸을 정리해 버려 촬영한 사진이 전달되지 않는다.
+ */
 function pickFiles({ multiple = false } = {}) {
+  document.querySelectorAll("input.file-picker").forEach((el) => el.remove());
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "image/*";
     input.multiple = multiple;
-    input.addEventListener("change", () => resolve([...input.files]));
+    input.className = "file-picker";
+    input.style.cssText = "position:fixed;left:-9999px;width:1px;height:1px;opacity:0";
+    const done = (files) => {
+      input.remove();
+      resolve(files);
+    };
+    input.addEventListener("change", () => done([...input.files]));
+    input.addEventListener("cancel", () => done([]));
+    document.body.appendChild(input);
     input.click();
   });
 }
@@ -739,6 +765,7 @@ async function addWorkoutPhotos() {
 async function addMealFromPhoto() {
   const [file] = await pickFiles();
   if (!file) return;
+  toast("사진 준비 중…");
   let photo;
   try {
     photo = await prepareImage(file);
@@ -999,7 +1026,7 @@ function openMealEditor({ meal, draft }) {
       renderItems();
       box.innerHTML = `<p class="eyebrow">AI 분석</p>${esc(r.description)}`;
     }).catch((e) => {
-      if ($modal.open) box.innerHTML = `<p class="eyebrow">AI 분석</p><span class="error">${esc(e.message)}</span><br>음식 이름만 적으면 칼로리는 AI가 채워 드려요.`;
+      if ($modal.open) box.innerHTML = `<p class="eyebrow">AI 분석</p><span class="error">${esc(e.message)}${e.status ? ` (오류 ${e.status})` : ""}</span><br>음식 이름만 적으면 칼로리는 AI가 채워 드려요.`;
     });
   }
 
